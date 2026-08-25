@@ -47,6 +47,8 @@ _VALID_AGGREGATIONS = [
     "rate",
 ]
 _NO_FIELD_AGGREGATIONS = {"count", "rate"}
+SUPPORTED_SIGNOZ_MIN = (0, 136)
+SUPPORTED_SIGNOZ_RANGE = ">=0.136"
 _TRACE_TABLE_KEYS = [
     "timestamp",
     "service.name",
@@ -68,6 +70,20 @@ _HISTORY_TABLE_KEYS = [
 # Root-level --profile value (single-process CLI, so a module holder is safe).
 # Precedence: leaf --profile flag > root --profile flag > SIGNOZ_PROFILE > default.
 _ROOT_PROFILE: str | None = None
+
+
+def _parse_version(version: str) -> tuple[int, ...]:
+    """Parse 'v0.136.1' into (0, 136, 1); unknown formats yield ()."""
+    m = __import__("re").fullmatch(r"v?(\d+(?:\.\d+){0,3})", (version or "").strip())
+    return tuple(int(p) for p in m.group(1).split(".")) if m else ()
+
+
+def _is_supported_server(version: str) -> bool:
+    parsed = _parse_version(version)
+    if not parsed:
+        return False
+    padded = parsed + (0,) * (len(SUPPORTED_SIGNOZ_MIN) - len(parsed))
+    return padded[: len(SUPPORTED_SIGNOZ_MIN)] >= SUPPORTED_SIGNOZ_MIN
 
 
 def _mask_token(token: str | None) -> str:
@@ -378,11 +394,28 @@ def auth_whoami(endpoint: str | None, token: str | None, profile_name: str | Non
 @_common_options
 def auth_verify(endpoint: str | None, token: str | None, fmt: str,
     profile: str | None,) -> None:
-    """Verify the API key against the live instance."""
+    """Verify the API key against the live instance and report version compatibility."""
     try:
-        client = _get_client(endpoint, token, profile)
+        client = _get_client(endpoint, token)
         data = client.verify()
-        emit(data, fmt)
+        try:
+            server_version = (client.get_server_version() or {}).get("version", "")
+        except Exception: 
+            server_version = ""
+        result = {
+            "service_account": data,
+            "server_version": server_version or "<unknown>",
+            "supported_range": SUPPORTED_SIGNOZ_RANGE,
+            "compatible": _is_supported_server(server_version),
+        }
+        emit(result, fmt)
+        if not result["compatible"]:
+            click.echo(
+                f"Warning: server version '{result['server_version']}' is outside "
+                f"the tested range ({SUPPORTED_SIGNOZ_RANGE}). "
+                "Commands may still work but are unverified.",
+                err=True,
+            )
     except Exception as e:
         _handle_error(e)
 

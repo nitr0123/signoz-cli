@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1 (2026-08-25)
+
+### Added
+
+- `auth verify` now reports the server's SigNoz version and whether it is
+  within the tested compatibility range (`>=0.136`)
+- Supported-range metadata: verified live against SigNoz v0.136.1 and v0.138.0
+- Pinned install instructions; release wheel published to Forgejo releases
+
 ## v0.2.0 (2026-08-25)
 
 Targets SigNoz **v0.138+** APIs.

@@ -1,6 +1,9 @@
 # signoz-cli
 
-A command-line tool for querying traces, logs, metrics, alerts, dashboards, and services from [SigNoz](https://signoz.io/) **v0.138+**.
+A command-line tool for querying traces, logs, metrics, alerts, dashboards, and services from [SigNoz](https://signoz.io/).
+
+**Supported SigNoz versions:** `>= 0.136` — verified live against **v0.136.1** and **v0.138.0**.
+`signoz auth verify` reports your server's version and whether it is in the tested range.
 
 Built for the current SigNoz API surface:
 
@@ -11,8 +14,26 @@ Built for the current SigNoz API surface:
 
 ## Installation
 
+### Pinned releases (recommended)
+
+Install a specific release directly from the Forgejo release assets:
+
 ```shell
-# From source (development)
+pip install https://git.example.com/hamza/signoz-cli/releases/download/v0.2.1/signoz_cli-0.2.1-py3-none-any.whl
+```
+
+Or pin to a git tag (any machine with SSH access to the Forgejo host):
+
+```shell
+pip install git+ssh://forgejo/hamza/signoz-cli.git@v0.2.1
+```
+
+Tags are immutable — `@v0.2.1` always gives you exactly the v0.2.1 build.
+See [releases](https://git.example.com/hamza/signoz-cli/releases) for available versions.
+
+### From source
+
+```shell
 git clone <this-repo> && cd signoz-cli
 pip install .
 

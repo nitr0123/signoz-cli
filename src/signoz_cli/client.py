@@ -47,6 +47,10 @@ class SigNozClient:
         """Validate the API key against /api/v1/service_accounts/me."""
         return self._get("/api/v1/service_accounts/me")
 
+    def get_server_version(self) -> Any:
+        """Fetch the SigNoz server version ({\"version\": \"vX.Y.Z\", ...})."""
+        return self._get("/api/v1/version")
+
     # ------------------------------------------------------------------
     # Metrics
     # ------------------------------------------------------------------
