@@ -213,3 +213,93 @@ def build_aggregate_query_payload(
         "formatOptions": {"formatTableResultForUI": False, "fillGaps": False},
         "variables": {},
     }
+
+
+def build_metrics_query_payload(
+    start: int,
+    end: int,
+    metric_name: str,
+    temporality: str = "Unspecified",
+    time_aggregation: str = "avg",
+    space_aggregation: str = "sum",
+    group_by: list[str] | None = None,
+    filter_expression: str = "",
+    step_interval: int = 60,
+) -> dict[str, Any]:
+    """Time-series aggregation over one metric (Query Builder v5)."""
+    return {
+        "schemaVersion": "v1",
+        "start": start,
+        "end": end,
+        "requestType": "time_series",
+        "compositeQuery": {
+            "queries": [
+                {
+                    "type": "builder_query",
+                    "spec": {
+                        "name": "A",
+                        "signal": "metrics",
+                        "stepInterval": step_interval,
+                        "disabled": False,
+                        "aggregations": [
+                            {
+                                "metricName": metric_name,
+                                "temporality": temporality,
+                                "timeAggregation": time_aggregation,
+                                "spaceAggregation": space_aggregation,
+                            }
+                        ],
+                        "filter": {"expression": filter_expression},
+                        "groupBy": [
+                            {"name": g, "signal": "metrics"} for g in (group_by or [])
+                        ],
+                    },
+                }
+            ]
+        },
+        "formatOptions": {"formatTableResultForUI": False, "fillGaps": False},
+        "variables": {},
+    }
+
+
+def build_promql_query_payload(
+    start: int,
+    end: int,
+    query: str,
+    step_interval: int = 60,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "v1",
+        "start": start,
+        "end": end,
+        "requestType": "time_series",
+        "compositeQuery": {
+            "queries": [
+                {
+                    "type": "promql",
+                    "spec": {"name": "A", "query": query, "stepInterval": step_interval},
+                }
+            ],
+        },
+        "formatOptions": {"formatTableResultForUI": False, "fillGaps": False},
+        "variables": {},
+    }
+
+
+def build_sql_query_payload(start: int, end: int, query: str) -> dict[str, Any]:
+    return {
+        "schemaVersion": "v1",
+        "start": start,
+        "end": end,
+        "requestType": "raw",
+        "compositeQuery": {
+            "queries": [
+                {
+                    "type": "clickhouse_sql",
+                    "spec": {"name": "A", "query": query, "disabled": False},
+                }
+            ],
+        },
+        "formatOptions": {"formatTableResultForUI": False, "fillGaps": False},
+        "variables": {},
+    }

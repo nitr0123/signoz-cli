@@ -20,13 +20,14 @@ from signoz_cli.config import (
     save_config,
     select_profile_name,
 )
-from signoz_cli.output import emit
+from signoz_cli.output import emit, set_output_file
 from signoz_cli.query import (
     build_aggregate_query_payload,
     build_logs_query_payload,
+    build_metrics_query_payload,
     build_traces_query_payload,
 )
-from signoz_cli.timeutil import resolve_timestamps
+from signoz_cli.timeutil import parse_time_range, resolve_timestamps
 
 # ---------------------------------------------------------------------------
 # Shared options
@@ -70,6 +71,16 @@ _HISTORY_TABLE_KEYS = [
 # Root-level --profile value (single-process CLI, so a module holder is safe).
 # Precedence: leaf --profile flag > root --profile flag > SIGNOZ_PROFILE > default.
 _ROOT_PROFILE: str | None = None
+_TIMEOUT_HOLDER: dict[str, float | None] = {"value": None}
+_INSECURE_HOLDER: dict[str, bool] = {"value": False}
+
+
+def _set_timeout(ctx: click.Context, param: click.Parameter, value: float | None) -> None:
+    _TIMEOUT_HOLDER["value"] = value
+
+
+def _set_insecure(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    _INSECURE_HOLDER["value"] = value
 
 
 def _parse_version(version: str) -> tuple[int, ...]:
@@ -122,8 +133,22 @@ def _set_json_flag(ctx: click.Context, param: click.Parameter, value: bool) -> N
         ctx.params["fmt"] = "json"
 
 
+def _set_output_file(ctx: click.Context, param: click.Parameter, value: str | None) -> None:
+    set_output_file(value)
+
+
 def _common_options(f):
     """Decorate a command with --endpoint / --token / --profile / --format / --json."""
+    f = click.option(
+        "-o",
+        "--output",
+        type=click.Path(dir_okay=False, writable=True),
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_output_file,
+        help="Write output to a file instead of stdout.",
+    )(f)
     f = click.option(
         "--endpoint",
         default=None,
@@ -146,7 +171,7 @@ def _common_options(f):
         "-f",
         "--format",
         "fmt",
-        type=click.Choice(["json", "table"]),
+        type=click.Choice(["json", "table", "csv"]),
         default="table",
         show_default=True,
         help="Output format.",
@@ -158,6 +183,24 @@ def _common_options(f):
         is_eager=True,
         callback=_set_json_flag,
         help="Shorthand for -f json.",
+    )(f)
+    f = click.option(
+        "--timeout",
+        type=float,
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_timeout,
+        help="Request timeout in seconds (env: SIGNOZ_TIMEOUT, default 120).",
+    )(f)
+    f = click.option(
+        "--insecure",
+        is_flag=True,
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_insecure,
+        help="Skip TLS certificate verification (env: SIGNOZ_INSECURE=1).",
     )(f)
     return f
 
@@ -194,7 +237,25 @@ def _get_client(
             "Missing token. Set via --token/--profile, the SIGNOZ_ACCESS_TOKEN "
             "env var, or 'signoz configure --profile <name> ...'."
         )
-    return SigNozClient(resolved_endpoint, resolved_token)
+
+    timeout = (
+        _TIMEOUT_HOLDER["value"]
+        if _TIMEOUT_HOLDER["value"] is not None
+        else (float(os.getenv("SIGNOZ_TIMEOUT")) if os.getenv("SIGNOZ_TIMEOUT") else 120.0)
+    )
+    insecure = _INSECURE_HOLDER["value"] or os.getenv("SIGNOZ_INSECURE", "") == "1"
+
+    cfg = load_config()
+    selected = select_profile_name(
+        cfg, profile or _ROOT_PROFILE, os.getenv("SIGNOZ_PROFILE")
+    )
+    prof = get_profiles(cfg).get(selected or "", {})
+    if "timeout" in prof and _TIMEOUT_HOLDER["value"] is None and not os.getenv("SIGNOZ_TIMEOUT"):
+        timeout = float(prof["timeout"])
+    if prof.get("insecure"):
+        insecure = True
+
+    return SigNozClient(resolved_endpoint, resolved_token, timeout=timeout, verify=not insecure)
 
 
 def _handle_error(e: Exception) -> None:
@@ -579,6 +640,12 @@ def alerts_get(endpoint: str | None, token: str | None, fmt: str,
     help="Filter expression over history labels (v2 API), e.g. \"service.name = 'checkout'\".",
 )
 @click.option("--cursor", default=None, help="Cursor from a previous page (nextCursor).")
+@click.option(
+    "--all",
+    "fetch_all",
+    is_flag=True,
+    help="Follow cursors and fetch every page.",
+)
 def alerts_history(
     endpoint: str | None,
     token: str | None,
@@ -593,6 +660,7 @@ def alerts_history(
     state: str | None,
     filter_expression: str | None,
     cursor: str | None,
+    fetch_all: bool,
 ) -> None:
     """Get alert history timeline for a rule (v2 API with cursor pagination)."""
     try:
@@ -602,12 +670,32 @@ def alerts_history(
             rule_id,
             s,
             e,
-            limit=limit,
+            limit=limit if not fetch_all else 100,
             order=order,
             state=state,
             filter_expression=filter_expression,
             cursor=cursor,
         )
+        if fetch_all and isinstance(data, dict):
+            items = list(data.get("data", {}).get("items") or [])
+            nxt = data.get("data", {}).get("nextCursor")
+            for _ in range(_MAX_PAGES):
+                if not nxt:
+                    break
+                page = client.get_alert_history_timeline(
+                    rule_id, s, e, limit=100, order=order, state=state,
+                    filter_expression=filter_expression, cursor=nxt,
+                )
+                payload = page.get("data", {}) if isinstance(page, dict) else {}
+                new_items = payload.get("items") or []
+                items.extend(new_items)
+                nxt = payload.get("nextCursor")
+                if not new_items:
+                    break
+            data = {
+                "data": {"items": items},
+                "total": data.get("total"),
+            }
         emit(_unwrap_history_timeline(data), fmt, table_keys=_HISTORY_TABLE_KEYS)
     except Exception as ex:
         _handle_error(ex)
@@ -702,6 +790,12 @@ def dashboards() -> None:
     "--offset", type=int, default=0, show_default=True, help="Pagination offset."
 )
 @click.option("--query", default=None, help='Search query, e.g. "name contains prod".')
+@click.option(
+    "--all",
+    "fetch_all",
+    is_flag=True,
+    help="Fetch every page (ignores --limit/--offset).",
+)
 def dashboards_list(
     endpoint: str | None,
     token: str | None,
@@ -710,15 +804,18 @@ def dashboards_list(
     limit: int,
     offset: int,
     query: str | None,
+    fetch_all: bool,
 ) -> None:
     """List dashboards (v2 API with pagination and search)."""
     try:
         client = _get_client(endpoint, token, profile)
+        if fetch_all:
+            limit, offset, total = 100, 0, None
         raw = client.list_dashboards_v2(limit=limit, offset=offset, query=query)
         # Response shape: {"status", "data": {"dashboards": [...], "total": N, ...}}
         payload = raw.get("data", {}) if isinstance(raw, dict) else {}
         if isinstance(payload, dict) and "dashboards" in payload:
-            items = payload.get("dashboards") or []
+            items = list(payload.get("dashboards") or [])
             total = payload.get("total")
         elif isinstance(payload, list):
             items = payload
@@ -726,17 +823,36 @@ def dashboards_list(
         else:
             items = []
             total = None
+        if fetch_all:
+            # walk remaining pages
+            while True:
+                offset += limit
+                raw_page = client.list_dashboards_v2(limit=limit, offset=offset, query=query)
+                page_payload = raw_page.get("data", {}) if isinstance(raw_page, dict) else {}
+                page_items = (page_payload.get("dashboards") or []) if isinstance(page_payload, dict) else []
+                items.extend(page_items)
+                if not page_items or (isinstance(page_payload, dict) and page_payload.get("total") is not None and offset + len(page_items) >= int(page_payload.get("total"))):
+                    break
         simplified = [_dashboard_summary(d) for d in items]
         result: dict[str, Any] = {"data": simplified}
-        if total is None:
-            total = len(items)
-        result["pagination"] = {
-            "total": int(total),
-            "offset": offset,
-            "limit": limit,
-            "hasMore": offset + limit < int(total),
-            "nextOffset": offset + limit if offset + limit < int(total) else None,
-        }
+        if fetch_all:
+            result["pagination"] = {
+                "total": int(total) if total is not None else len(items),
+                "offset": 0,
+                "limit": len(items),
+                "hasMore": False,
+                "nextOffset": None,
+            }
+        else:
+            if total is None:
+                total = len(items)
+            result["pagination"] = {
+                "total": int(total),
+                "offset": offset,
+                "limit": limit,
+                "hasMore": offset + limit < int(total),
+                "nextOffset": offset + limit if offset + limit < int(total) else None,
+            }
         emit(result, fmt)
     except Exception as e:
         _handle_error(e)
@@ -935,6 +1051,12 @@ def logs() -> None:
 @click.option(
     "--offset", type=int, default=0, show_default=True, help="Pagination offset."
 )
+@click.option(
+    "--all",
+    "fetch_all",
+    is_flag=True,
+    help="Fetch all matching rows (ignores --limit/--offset).",
+)
 def logs_search(
     endpoint: str | None,
     token: str | None,
@@ -949,16 +1071,20 @@ def logs_search(
     end: int | None,
     limit: int,
     offset: int,
+    fetch_all: bool,
 ) -> None:
     """Search logs with flexible filtering across all services."""
     try:
         client = _get_client(endpoint, token, profile)
         filter_expr = _build_log_filter(query, service, severity, search_text)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h")
-        payload = build_logs_query_payload(
-            s, e, filter_expr, limit=limit, offset=offset
-        )
-        data = _unwrap_v5(client.query_builder_v5(payload))
+        if fetch_all:
+            data = _logs_query_all(client, s, e, filter_expr, limit=100)
+        else:
+            payload = build_logs_query_payload(
+                s, e, filter_expr, limit=limit, offset=offset
+            )
+            data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt)
     except Exception as ex:
         _handle_error(ex)
@@ -1164,6 +1290,12 @@ def traces() -> None:
 @click.option("--start", type=int, default=None, help="Start timestamp in ms.")
 @click.option("--end", type=int, default=None, help="End timestamp in ms.")
 @click.option("--limit", type=int, default=100, show_default=True, help="Max results.")
+@click.option(
+    "--all",
+    "fetch_all",
+    is_flag=True,
+    help="Fetch all matching spans (follows nextCursor).",
+)
 def traces_search(
     endpoint: str | None,
     token: str | None,
@@ -1178,6 +1310,7 @@ def traces_search(
     start: int | None,
     end: int | None,
     limit: int,
+    fetch_all: bool,
 ) -> None:
     """Search traces with flexible filtering."""
     try:
@@ -1188,8 +1321,11 @@ def traces_search(
         if max_duration is not None:
             filter_expr = _append_filter(filter_expr, f"durationNano <= {max_duration}")
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
-        payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
-        data = _unwrap_v5(client.query_builder_v5(payload))
+        if fetch_all:
+            data = _traces_query_all(client, s, e, filter_expr, limit=100)
+        else:
+            payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
+            data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt, table_keys=_TRACE_TABLE_KEYS)
     except Exception as ex:
         _handle_error(ex)
@@ -1441,9 +1577,653 @@ def query_raw(endpoint: str | None, token: str | None, fmt: str,
         _handle_error(e)
 
 
+
+# ===================================================================
+# METRICS QUERY (values)
+# ===================================================================
+
+
+def _unwrap_time_series(data: Any) -> list[dict[str, Any]]:
+    """Flatten a v5 time_series response into (series, timestamp, value) rows.
+
+    Actual shape: data.results[0].aggregations[*].series[*].values[*],
+    with optional per-series ``labels``.
+    """
+    try:
+        results = data["data"]["data"]["results"]
+    except (KeyError, TypeError, IndexError, AttributeError):
+        return []
+    rows: list[dict[str, Any]] = []
+    for result in results or []:
+        for agg in result.get("aggregations") or []:
+            alias = agg.get("alias") or ""
+            for s in agg.get("series") or []:
+                labels = s.get("labels") or []
+                label_str = ", ".join(
+                    f"{lb.get('key','')}={lb.get('value','')}" for lb in labels
+                ) or alias or "A"
+                for point in s.get("values") or []:
+                    rows.append({
+                        "series": label_str,
+                        "timestamp": point.get("timestamp"),
+                        "value": point.get("value"),
+                    })
+    return rows
+
+
+@metrics.command("query")
+@_common_options
+@click.argument("metric_name")
+@click.option("--time-aggregation", default="avg", show_default=True,
+              type=click.Choice(["avg", "sum", "min", "max", "count", "rate",
+                                 "increase", "p50", "p75", "p90", "p95", "p99"]),
+              help="Temporal aggregation.")
+@click.option("--space-aggregation", default="sum", show_default=True,
+              type=click.Choice(["sum", "avg", "min", "max", "count"]),
+              help="Spatial aggregation across dimensions.")
+@click.option("--temporality", default=None,
+              type=click.Choice(["Unspecified", "Delta", "Cumulative"]),
+              help="Metric temporality. Defaults: Gauge=Unspecified, Sum=Cumulative.")
+@click.option("--group-by", default=None, help="Comma-separated attribute keys.")
+@click.option("--filter", "filter_expr", default="", help="Filter expression.")
+@click.option("--step", type=int, default=60, show_default=True,
+              help="Step interval in seconds.")
+@_time_options(default_range="1h")
+def metrics_query(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    metric_name: str,
+    time_aggregation: str,
+    space_aggregation: str,
+    temporality: str | None,
+    group_by: str | None,
+    filter_expr: str,
+    step: int,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Query metric VALUES over time (v5 time series).
+
+    Examples:
+
+      signoz metrics query app.payments.total --time-aggregation rate
+
+      signoz metrics query system.cpu.time -g "host.name"
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        if temporality is None:
+            temporality = "Cumulative" if time_aggregation in ("rate", "sum") else "Unspecified"
+        group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
+        payload = build_metrics_query_payload(
+            s, e, metric_name,
+            temporality=temporality,
+            time_aggregation=time_aggregation,
+            space_aggregation=space_aggregation,
+            group_by=group_by_fields,
+            filter_expression=filter_expr,
+            step_interval=step,
+        )
+        resp = client.query_builder_v5(payload)
+        _warn_v5(resp)
+        emit(_unwrap_time_series(resp), fmt,
+             table_keys=["series", "timestamp", "value"])
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@cli.command("promql")
+@_common_options
+@click.argument("query")
+@click.option("--step", type=int, default=60, show_default=True, help="Step seconds.")
+@_time_options(default_range="1h")
+def promql_query(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    query: str,
+    step: int,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Run a PromQL query against metrics.
+
+    Example: signoz promql 'rate(signoz_calls_total[5m])' --time-range 1h
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        resp = client.query_promql(query, s, e, step=step)
+        _warn_v5(resp)
+        emit(_unwrap_time_series(resp), fmt,
+             table_keys=["series", "timestamp", "value"])
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@cli.command("sql")
+@_common_options
+@click.argument("query")
+@_time_options(default_range="6h")
+def sql_query(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    query: str,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Run raw ClickHouse SQL (admin-level permission may be required).
+
+    The start/end range is applied via the usual telemetry time window.
+
+    Example: signoz sql "SELECT count() FROM signoz_logs.logs_v2" --time-range 1h
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        resp = client.query_sql(query, s, e)
+        emit(_unwrap_v5(resp), fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+
+# ===================================================================
+# TRACE DETAIL / LOGS TAIL
+# ===================================================================
+
+
+@traces.command("detail")
+@_common_options
+@click.argument("trace_id")
+@_time_options(default_range="6h")
+def traces_detail(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    trace_id: str,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Full span detail for a trace: attributes, events, exceptions."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        data = client.get_trace_detail(trace_id, s, e)
+        emit(data, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@logs.command("tail")
+@_common_options
+@click.option("--service", default=None, help="Service name filter.")
+@click.option("--severity", default=None, help="Minimum severity filter.")
+@click.option("--search-text", default=None, help="Body text filter (CONTAINS).")
+@click.option("--interval", type=float, default=3.0, show_default=True,
+              help="Poll interval in seconds.")
+@click.option("--window", default="30s", show_default=True,
+              help="Look-back window per poll.")
+def logs_tail(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    service: str | None,
+    severity: str | None,
+    search_text: str | None,
+    interval: float,
+    window: str,
+) -> None:
+    """Follow new logs as they arrive (poll-based; Ctrl-C to stop)."""
+    import time as _time
+
+    try:
+        client = _get_client(endpoint, token, profile)
+    except Exception as ex:
+        _handle_error(ex)
+        return
+
+    filter_expr = _build_log_filter(None, service, severity, search_text)
+    seen: set[str] = set()
+    click.echo("Tailing logs... Ctrl-C to stop.", err=True)
+    try:
+        while True:
+            now_ms = int(_time.time() * 1000)
+            win_ms = parse_time_range(window)
+            payload = build_logs_query_payload(
+                now_ms - win_ms, now_ms, filter_expr, limit=100
+            )
+            try:
+                rows = _unwrap_v5(client.query_builder_v5(payload))
+            except Exception as ex:
+                click.echo(f"tail: {ex}", err=True)
+                _time.sleep(interval)
+                continue
+            if isinstance(rows, list):
+                for row in reversed(rows):  # oldest first
+                    row_id = str(row.get("id", ""))
+                    if row_id and row_id in seen:
+                        continue
+                    seen.add(row_id)
+                    click.echo(
+                        f"{row.get('timestamp', '')} "
+                        f"{row.get('severity_text', '')!s:5s} "
+                        f"{row.get('service.name', '')}: {row.get('body', '')}"
+                    )
+            # bound memory
+            if len(seen) > 50000:
+                seen = set(list(seen)[-10000:])
+            _time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("Stopped.", err=True)
+
+
+
+# ===================================================================
+# ALERT RULE MANAGEMENT (v2)
+# ===================================================================
+
+
+@alerts.command("create")
+@_common_options
+@click.argument("json_file", type=click.Path(exists=True))
+def alerts_create(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None, json_file: str) -> None:
+    """Create an alert rule from a JSON file (v2 rule schema)."""
+    try:
+        with open(json_file) as f:
+            rule = json.load(f)
+        client = _get_client(endpoint, token, profile)
+        data = client.create_rule(rule)
+        emit(data, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@alerts.command("update")
+@_common_options
+@click.argument("rule_id")
+@click.argument("json_file", type=click.Path(exists=True))
+def alerts_update(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None, rule_id: str, json_file: str) -> None:
+    """Replace an alert rule from a JSON file (full PUT)."""
+    try:
+        with open(json_file) as f:
+            rule = json.load(f)
+        client = _get_client(endpoint, token, profile)
+        data = client.update_rule(rule_id, rule)
+        emit(data or {"status": "updated"}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@alerts.command("patch")
+@_common_options
+@click.argument("rule_id")
+@click.argument("json_file", type=click.Path(exists=True))
+def alerts_patch(endpoint: str | None, token: str | None, fmt: str,
+                 profile: str | None, rule_id: str, json_file: str) -> None:
+    """Apply partial updates to a rule (JSON-Patch array)."""
+    try:
+        with open(json_file) as f:
+            patches = json.load(f)
+        if not isinstance(patches, list):
+            raise click.UsageError("Patch file must contain a JSON array.")
+        client = _get_client(endpoint, token, profile)
+        data = client.patch_rule(rule_id, patches)
+        emit(data or {"status": "patched"}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@alerts.command("delete")
+@_common_options
+@click.argument("rule_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def alerts_delete(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None, rule_id: str, yes: bool) -> None:
+    """Delete an alert rule."""
+    try:
+        if not yes:
+            click.confirm(f"Delete alert rule {rule_id}?", abort=True)
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_rule(rule_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@alerts.command("test")
+@_common_options
+@click.argument("json_file", type=click.Path(exists=True))
+@click.option("--start", type=int, default=None, help="Test-window start (ms).")
+@click.option("--end", type=int, default=None, help="Test-window end (ms).")
+@click.option("--time-range", default="1h", show_default=True, help="Test window.")
+def alerts_test(endpoint: str | None, token: str | None, fmt: str,
+                profile: str | None, json_file: str,
+                start: int | None, end: int | None, time_range: str) -> None:
+    """Dry-run a rule payload and see what would fire."""
+    try:
+        with open(json_file) as f:
+            rule = json.load(f)
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        rule = dict(rule)
+        rule.setdefault("start", s)
+        rule.setdefault("end", e)
+        data = client.test_rule(rule)
+        emit(data, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+# ===================================================================
+# NOTIFICATION CHANNELS (admin)
+# ===================================================================
+
+
+@cli.group("channels")
+def channels() -> None:
+    """Manage notification channels (requires admin)."""
+
+
+@channels.command("list")
+@_common_options
+def channels_list(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None) -> None:
+    """List notification channels."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.list_channels(), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@channels.command("get")
+@_common_options
+@click.argument("channel_id")
+def channels_get(endpoint: str | None, token: str | None, fmt: str,
+                 profile: str | None, channel_id: str) -> None:
+    """Get a channel by id."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.get_channel(channel_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@channels.command("create")
+@_common_options
+@click.argument("json_file", type=click.Path(exists=True))
+def channels_create(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, json_file: str) -> None:
+    """Create a channel from a JSON file."""
+    try:
+        with open(json_file) as f:
+            channel = json.load(f)
+        client = _get_client(endpoint, token, profile)
+        emit(client.create_channel(channel), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@channels.command("delete")
+@_common_options
+@click.argument("channel_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def channels_delete(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, channel_id: str, yes: bool) -> None:
+    """Delete a channel."""
+    try:
+        if not yes:
+            click.confirm(f"Delete channel {channel_id}?", abort=True)
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_channel(channel_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+# ===================================================================
+# SAVED VIEWS (0.137+)
+# ===================================================================
+
+
+@cli.group("views")
+def views() -> None:
+    """Manage saved explorer views (SigNoz 0.137+)."""
+
+
+@views.command("list")
+@_common_options
+@click.option("--source-page", default="logs", show_default=True,
+              type=click.Choice(["logs", "traces", "metrics"]),
+              help="Which explorer the view belongs to.")
+def views_list(endpoint: str | None, token: str | None, fmt: str,
+               profile: str | None, source_page: str) -> None:
+    """List saved views."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.list_saved_views(source_page), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@views.command("get")
+@_common_options
+@click.argument("view_id")
+def views_get(endpoint: str | None, token: str | None, fmt: str,
+              profile: str | None, view_id: str) -> None:
+    """Get a saved view by id."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.get_saved_view(view_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@views.command("delete")
+@_common_options
+@click.argument("view_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def views_delete(endpoint: str | None, token: str | None, fmt: str,
+                 profile: str | None, view_id: str, yes: bool) -> None:
+    """Delete a saved view."""
+    try:
+        if not yes:
+            click.confirm(f"Delete saved view {view_id}?", abort=True)
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_saved_view(view_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+# ===================================================================
+# SERVICE ACCOUNTS (admin)
+# ===================================================================
+
+
+@cli.group("service-accounts")
+def service_accounts() -> None:
+    """Manage service accounts and roles (requires admin)."""
+
+
+@service_accounts.command("list")
+@_common_options
+def service_accounts_list(endpoint: str | None, token: str | None, fmt: str,
+                          profile: str | None) -> None:
+    """List service accounts."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.list_service_accounts()
+        items = raw.get("data") if isinstance(raw, dict) else raw
+        if isinstance(items, dict):
+            items = items.get("data") or items.get("accounts") or []
+        simplified = [
+            {
+                "id": a.get("id", ""),
+                "name": a.get("name", ""),
+                "status": a.get("status", ""),
+                "email": a.get("email", ""),
+            }
+            for a in (items or [])
+            if isinstance(a, dict)
+        ]
+        emit({"data": simplified}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@service_accounts.command("create")
+@_common_options
+@click.argument("name")
+@click.option("--role", "role_name", default=None,
+              help="Assign this managed role after creation (e.g. viewer).")
+def service_accounts_create(endpoint: str | None, token: str | None, fmt: str,
+                            profile: str | None, name: str,
+                            role_name: str | None) -> None:
+    """Create a service account, optionally assigning a managed role."""
+    try:
+        import re as _re
+
+        if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{0,49}", name):
+            raise click.UsageError(
+                "Name must be lowercase letters/numbers/hyphens, max 50 chars."
+            )
+        client = _get_client(endpoint, token, profile)
+        role_ids: list[str] = []
+        if role_name:
+            roles_raw = client.list_roles()
+            roles = roles_raw.get("data") if isinstance(roles_raw, dict) else roles_raw
+            wanted = role_name.lower().replace("signoz-", "")
+            for r in roles or []:
+                if r.get("name", "").lower().replace("signoz-", "") == wanted:
+                    role_ids.append(r["id"])
+                    break
+            if not role_ids:
+                raise click.UsageError(f"Unknown role '{role_name}'.")
+        data = client.create_service_account(name, role_ids)
+        emit(data, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@service_accounts.command("delete")
+@_common_options
+@click.argument("account_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def service_accounts_delete(endpoint: str | None, token: str | None, fmt: str,
+                            profile: str | None, account_id: str, yes: bool) -> None:
+    """Delete a service account (revokes all its keys)."""
+    try:
+        if not yes:
+            click.confirm(f"Delete service account {account_id}?", abort=True)
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_service_account(account_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@service_accounts.command("roles")
+@_common_options
+def service_accounts_roles(endpoint: str | None, token: str | None, fmt: str,
+                           profile: str | None) -> None:
+    """List available roles."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.list_roles()
+        items = raw.get("data") if isinstance(raw, dict) else raw
+        simplified = [
+            {"id": r.get("id", ""), "name": r.get("name", ""),
+             "type": r.get("type", ""), "description": r.get("description", "")}
+            for r in (items or []) if isinstance(r, dict)
+        ]
+        emit({"data": simplified}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_MAX_PAGES = 200
+
+
+def _logs_query_all(
+    client: SigNozClient,
+    s: int,
+    e: int,
+    filter_expr: str,
+    limit: int,
+) -> list[Any]:
+    """Fetch all log rows by walking the offset until exhausted."""
+    rows: list[Any] = []
+    offset = 0
+    for _ in range(_MAX_PAGES):
+        payload = build_logs_query_payload(
+            s, e, filter_expr, limit=limit, offset=offset
+        )
+        page = _unwrap_v5(client.query_builder_v5(payload))
+        if not isinstance(page, list):
+            return page  # error passthrough
+        rows.extend(page)
+        if len(page) < limit:
+            break
+        offset += limit
+    return rows
+
+
+def _traces_query_all(
+    client: SigNozClient,
+    s: int,
+    e: int,
+    filter_expr: str,
+    limit: int,
+) -> list[Any]:
+    """Fetch all span rows by following the raw-result nextCursor."""
+    rows: list[Any] = []
+    cursor: str | None = None
+    for _ in range(_MAX_PAGES):
+        payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
+        resp = client.query_builder_v5(payload)
+        nxt = None
+        try:
+            results = resp["data"]["data"]["results"]
+            nxt = (results[0] or {}).get("nextCursor") or None
+        except (KeyError, TypeError, IndexError):
+            pass
+        page = _unwrap_v5(resp)
+        if not isinstance(page, list):
+            return page
+        rows.extend(page)
+        if not nxt or nxt == cursor:
+            break
+        cursor = nxt
+    return rows
+
+
+def _warn_v5(data: Any) -> None:
+    """Print server-side warnings from a v5 response (e.g. no-data notices)."""
+    try:
+        warnings = data["data"]["meta"]["warning"]["warnings"] or []
+    except (KeyError, TypeError):
+        return
+    for w in warnings:
+        msg = w.get("message", "") if isinstance(w, dict) else str(w)
+        if msg:
+            click.echo(f"Warning: {msg}", err=True)
 
 
 def _unwrap_v5(data: Any, agg_label: str | None = None) -> Any:
