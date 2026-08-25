@@ -1,10 +1,13 @@
-"""HTTP client for the SigNoz API (targets SigNoz 0.138+)."""
+"""HTTP client for the SigNoz API (targets SigNoz 0.136+ / 0.138+)."""
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
+
+_RETRYABLE = {429, 500, 502, 503, 504}
 
 
 class SigNozApiError(Exception):
@@ -26,9 +29,11 @@ class SigNozClient:
         timeout: float = 120.0,
         verify: bool = True,
         transport: httpx.BaseTransport | None = None,
+        max_retries: int = 3,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.token = token
+        self.max_retries = max_retries
         self._client = httpx.Client(
             timeout=timeout,
             verify=verify,
@@ -38,6 +43,9 @@ class SigNozClient:
             },
             transport=transport,
         )
+
+    def close(self) -> None:
+        self._client.close()
 
     # ------------------------------------------------------------------
     # Auth
@@ -186,7 +194,7 @@ class SigNozClient:
         return self._patch(f"/api/v2/dashboards/{dashboard_id}", json_body=patches)
 
     def delete_dashboard_v2(self, dashboard_id: str) -> Any:
-        resp = self._client.delete(f"{self.endpoint}/api/v2/dashboards/{dashboard_id}")
+        resp = self._request("DELETE", f"/api/v2/dashboards/{dashboard_id}")
         return self._parse(resp, allow_empty=True)
 
     # ------------------------------------------------------------------
@@ -271,6 +279,152 @@ class SigNozClient:
     def query_builder_v5(self, payload: dict[str, Any]) -> Any:
         return self._post("/api/v5/query_range", json_body=payload)
 
+    def query_promql(self, query: str, start: int, end: int, step: int = 60) -> Any:
+        payload = {
+            "schemaVersion": "v1",
+            "start": start,
+            "end": end,
+            "requestType": "time_series",
+            "compositeQuery": {
+                "queries": [
+                    {"type": "promql", "spec": {"name": "A", "query": query}}
+                ],
+            },
+            "formatOptions": {"fillGaps": False},
+            "variables": {},
+        }
+        return self._post("/api/v5/query_range", json_body=payload)
+
+    def query_sql(self, query: str, start: int, end: int) -> Any:
+        payload = {
+            "schemaVersion": "v1",
+            "start": start,
+            "end": end,
+            "requestType": "raw",
+            "compositeQuery": {
+                "queries": [
+                    {"type": "clickhouse_sql", "spec": {"name": "A", "query": query, "disabled": False}}
+                ],
+            },
+            "formatOptions": {"fillGaps": False},
+            "variables": {},
+        }
+        return self._post("/api/v5/query_range", json_body=payload)
+
+    def get_trace_detail(self, trace_id: str, start: int, end: int) -> Any:
+        return self._get(f"/api/v3/trace/{trace_id}", params={"start": str(start), "end": str(end)})
+
+    # ------------------------------------------------------------------
+    # Alert rule management (v2)
+    # ------------------------------------------------------------------
+
+    def create_rule(self, rule: dict[str, Any]) -> Any:
+        return self._post("/api/v2/rules", json_body=rule)
+
+    def update_rule(self, rule_id: str, rule: dict[str, Any]) -> Any:
+        return self._put(f"/api/v2/rules/{rule_id}", json_body=rule)
+
+    def patch_rule(self, rule_id: str, patches: list[dict[str, Any]]) -> Any:
+        return self._patch(f"/api/v2/rules/{rule_id}", json_body=patches)
+
+    def delete_rule(self, rule_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v2/rules/{rule_id}")
+        return self._parse(resp, allow_empty=True)
+
+    def test_rule(self, rule: dict[str, Any]) -> Any:
+        return self._post("/api/v2/rules/test", json_body=rule)
+
+    # ------------------------------------------------------------------
+    # Notification channels (admin)
+    # ------------------------------------------------------------------
+
+    def list_channels(self) -> Any:
+        return self._get("/api/v1/channels")
+
+    def get_channel(self, channel_id: str) -> Any:
+        return self._get(f"/api/v1/channels/{channel_id}")
+
+    def create_channel(self, channel: dict[str, Any]) -> Any:
+        return self._post("/api/v1/channels", json_body=channel)
+
+    def update_channel(self, channel_id: str, channel: dict[str, Any]) -> Any:
+        return self._put(f"/api/v1/channels/{channel_id}", json_body=channel)
+
+    def delete_channel(self, channel_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v1/channels/{channel_id}")
+        return self._parse(resp, allow_empty=True)
+
+    # ------------------------------------------------------------------
+    # Saved views (0.137+ spec-based API)
+    # ------------------------------------------------------------------
+
+    def list_saved_views(self, source_page: str = "logs") -> Any:
+        return self._get("/api/v1/saved_views", params={"sourcePage": source_page})
+
+    def get_saved_view(self, view_id: str) -> Any:
+        return self._get(f"/api/v1/saved_views/{view_id}")
+
+    def create_saved_view(self, view: dict[str, Any]) -> Any:
+        return self._post("/api/v1/saved_views", json_body=view)
+
+    def delete_saved_view(self, view_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v1/saved_views/{view_id}")
+        return self._parse(resp, allow_empty=True)
+
+    # ------------------------------------------------------------------
+    # Service accounts (admin)
+    # ------------------------------------------------------------------
+
+    def list_service_accounts(self) -> Any:
+        return self._get("/api/v1/service_accounts")
+
+    def create_service_account(self, name: str, role_ids: list[str] | None = None) -> Any:
+        data = self._post("/api/v1/service_accounts", json_body={"name": name})
+        if role_ids and isinstance(data, dict):
+            new_id = (data.get("data") or {}).get("id")
+            if new_id:
+                for rid in role_ids:
+                    try:
+                        self._post(
+                            f"/api/v1/service_accounts/{new_id}/roles",
+                            json_body={"id": rid},
+                        )
+                    except SigNozApiError:
+                        pass
+        return data
+
+    def delete_service_account(self, account_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v1/service_accounts/{account_id}")
+        return self._parse(resp, allow_empty=True)
+
+    def list_roles(self) -> Any:
+        return self._get("/api/v1/roles")
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: Any = None,
+    ) -> httpx.Response:
+        """Send a request with retry/backoff on 429 and transient 5xx."""
+        attempt = 0
+        while True:
+            resp = self._client.request(
+                method, f"{self.endpoint}{path}", params=params, json=json_body
+            )
+            if resp.status_code in _RETRYABLE and attempt < self.max_retries:
+                delay = min(2**attempt, 30)
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("Retry-After", "")
+                    if retry_after.isdigit():
+                        delay = max(delay, min(int(retry_after), 60))
+                time.sleep(delay)
+                attempt += 1
+                continue
+            return resp
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -288,16 +442,16 @@ class SigNozClient:
             return {"raw": resp.text}
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any:
-        return self._parse(self._client.get(f"{self.endpoint}{path}", params=params))
+        return self._parse(self._request("GET", path, params=params))
 
     def _post(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._client.post(f"{self.endpoint}{path}", json=json_body))
+        return self._parse(self._request("POST", path, json_body=json_body))
 
     def _put(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._client.put(f"{self.endpoint}{path}", json=json_body))
+        return self._parse(self._request("PUT", path, json_body=json_body))
 
     def _patch(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._client.patch(f"{self.endpoint}{path}", json=json_body))
+        return self._parse(self._request("PATCH", path, json_body=json_body))
 
 
 def _extract_error(resp: httpx.Response) -> str:

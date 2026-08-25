@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    name: Build and attach release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build sdist and wheel
+        run: |
+          python -m build
+          twine check dist/*
+
+      - name: Smoke-test wheel install
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          /tmp/wheel-venv/bin/signoz --version
+
+      - name: Upload artifacts to Forgejo release
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          HOST="http://localhost:3001"
+          REPO="${GITHUB_REPOSITORY}"
+          TAG="${GITHUB_REF_NAME}"
+
+          RID=$(curl -s "$HOST/api/v1/repos/$REPO/releases/tags/$TAG" \
+            -H "Authorization: token $TOKEN" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
+
+          if [ -z "$RID" ]; then
+            echo "Release for $TAG does not exist; creating."
+            BODY=$(python3 - "$TAG" <<'PY'
+            import json, sys
+            print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1],
+                              "body": f"Release {sys.argv[1]} (created by CI)"}))
+            PY
+            )
+            RID=$(curl -s -X POST "$HOST/api/v1/repos/$REPO/releases" \
+              -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+              -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          fi
+          echo "release id: $RID"
+
+          for f in dist/*; do
+            NAME=$(basename "$f")
+            echo "uploading $NAME"
+            curl -s -X POST \
+              "$HOST/api/v1/repos/$REPO/releases/$RID/assets?name=$NAME" \
+              -H "Authorization: token $TOKEN" \
+              -F "attachment=@$f"
+            echo
+          done

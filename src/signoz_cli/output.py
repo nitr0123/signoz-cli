@@ -1,7 +1,9 @@
-"""Output formatting helpers (JSON and table)."""
+"""Output formatting helpers (JSON, table, CSV)."""
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from typing import Any
 
@@ -9,22 +11,65 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+_OUTPUT_FILE: str | None = None
+
+
+def set_output_file(path: str | None) -> None:
+    """Route all subsequent emit() output to *path* (-o/--output flag)."""
+    global _OUTPUT_FILE
+    _OUTPUT_FILE = path
+
+
+def _write(text: str) -> None:
+    if _OUTPUT_FILE:
+        with open(_OUTPUT_FILE, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        click.echo(f"Output written to {_OUTPUT_FILE}", err=True)
+    else:
+        click.echo(text, nl=False)
+
+
+def _to_csv(rows: list[dict[str, Any]]) -> str:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row:
+            if k not in seen:
+                keys.append(k)
+                seen.add(k)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=keys, restval="")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in keys})
+    return buf.getvalue()
+
 
 def emit(data: Any, fmt: str, table_keys: list[str] | None = None) -> None:
-    """Print *data* in the requested format ('json' or 'table').
-
-    ``table_keys`` optionally restricts which columns are shown in table mode
-    (rows keep all fields under --format json).
-    """
+    """Print *data* in the requested format ('json', 'table' or 'csv')."""
     if fmt == "json":
-        click.echo(json.dumps(data, indent=2, default=str))
+        _write(json.dumps(data, indent=2, default=str) + "\n")
+    elif fmt == "csv":
+        if isinstance(data, dict):
+            for probe in ("data", "items"):
+                if isinstance(data.get(probe), list):
+                    data = data[probe]
+                    break
+        if not isinstance(data, list) or not all(isinstance(r, dict) for r in data):
+            raise click.UsageError(
+                "CSV output requires tabular rows; this command returned a "
+                "non-tabular structure. Use -f json instead."
+            )
+        if not data:
+            raise click.UsageError("No rows to write.")
+        _write(_to_csv([r for r in data]))
     else:
         _print_table(data, table_keys)
 
 
 def _print_table(data: Any, table_keys: list[str] | None = None) -> None:
     """Best-effort rich table rendering for arbitrary JSON structures."""
-    console = Console()
+    console = Console(file=io.StringIO()) if _OUTPUT_FILE else Console()
 
     # Unwrap common SigNoz envelopes
     if isinstance(data, dict):
@@ -35,7 +80,7 @@ def _print_table(data: Any, table_keys: list[str] | None = None) -> None:
 
     if isinstance(data, list):
         if not data:
-            click.echo("(no results)")
+            _write("(no results)\n")
             return
         if isinstance(data[0], dict):
             if table_keys:
@@ -44,8 +89,7 @@ def _print_table(data: Any, table_keys: list[str] | None = None) -> None:
                 ]
             _dict_list_table(console, data)
         else:
-            for item in data:
-                click.echo(item)
+            _write("\n".join(str(item) for item in data) + "\n")
     elif isinstance(data, dict):
         table = Table(show_header=True, header_style="bold")
         table.add_column("Key")
@@ -54,7 +98,11 @@ def _print_table(data: Any, table_keys: list[str] | None = None) -> None:
             table.add_row(str(k), _trunc(v))
         console.print(table)
     else:
-        click.echo(data)
+        _write(f"{data}\n")
+
+    if _OUTPUT_FILE and isinstance(console.file, io.StringIO):
+        with open(_OUTPUT_FILE, "w", encoding="utf-8") as fh:
+            fh.write(console.file.getvalue())
 
 
 def _flatten(row: dict[str, Any]) -> dict[str, Any]:
