@@ -95,3 +95,19 @@ class TestRootProfileFlag:
         monkeypatch.setattr(m, "_ROOT_PROFILE", "local")
         ep, tok = _resolve_credentials(None, None, "prod")
         assert (ep, tok) == ("https://prod:443", "tok-prod")
+
+
+class TestServerVersionCompat:
+    def test_parse_version(self):
+        from signoz_cli.main import _parse_version
+        assert _parse_version("v0.138.0") == (0, 138, 0)
+        assert _parse_version("v0.136.1") == (0, 136, 1)
+        assert _parse_version("") == ()
+        assert _parse_version("banana") == ()
+
+    def test_supported_range(self):
+        from signoz_cli.main import _is_supported_server
+        assert _is_supported_server("v0.136.1") is True
+        assert _is_supported_server("v0.138.0") is True
+        assert _is_supported_server("v0.135.9") is False
+        assert _is_supported_server("unknown") is False
