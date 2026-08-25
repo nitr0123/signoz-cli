@@ -1,0 +1,161 @@
+"""End-to-end CLI tests for profiles using click's CliRunner (no server)."""
+
+import json
+
+import pytest
+from click.testing import CliRunner
+
+from signoz_cli import __version__
+from signoz_cli.main import cli
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    cfg_dir = tmp_path / ".signoz"
+    monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr("signoz_cli.config.CONFIG_FILE", cfg_dir / "config.json")
+    for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN", "SIGNOZ_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
+    return cfg_dir
+
+
+@pytest.fixture()
+def runner():
+    return CliRunner()
+
+
+class TestBasics:
+    def test_version(self, runner):
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert __version__ in result.output
+
+    def test_help_lists_groups(self, runner):
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        for group in ("alerts", "auth", "dashboards", "logs", "metrics",
+                      "profile", "query", "services", "traces"):
+            assert group in result.output
+
+
+class TestMissingCredentials:
+    def test_error_without_any_config(self, runner):
+        result = runner.invoke(cli, ["logs", "search"])
+        assert result.exit_code != 0
+        assert "Missing endpoint" in result.output
+
+    def test_error_without_token(self, runner, tmp_path, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://x:8080")
+        result = runner.invoke(cli, ["logs", "search"])
+        assert result.exit_code != 0
+        assert "Missing token" in result.output
+
+
+class TestConfigureAndProfiles:
+    def test_configure_creates_default_profile(self, runner):
+        result = runner.invoke(cli, [
+            "configure", "--profile", "local",
+            "--endpoint", "http://localhost:8080", "--token", "secret-token-123456",
+        ])
+        assert result.exit_code == 0, result.output
+
+        from signoz_cli.config import load_config
+        cfg = load_config()
+        assert cfg["default"] == "local"
+        assert cfg["profiles"]["local"]["endpoint"] == "http://localhost:8080"
+        assert cfg["profiles"]["local"]["token"] == "secret-token-123456"
+
+    def test_second_profile_does_not_change_default(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "t1"])
+        runner.invoke(cli, ["configure", "-p", "b", "--endpoint", "http://b:2", "--token", "t2"])
+        from signoz_cli.config import load_config
+        cfg = load_config()
+        assert cfg["default"] == "a"
+        assert set(cfg["profiles"]) == {"a", "b"}
+
+    def test_explicit_set_default(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "t"])
+        result = runner.invoke(cli, [
+            "configure", "-p", "b", "--endpoint", "http://b:2", "--token", "t",
+            "--set-default",
+        ])
+        assert result.exit_code == 0, result.output
+        from signoz_cli.config import load_config
+        assert load_config()["default"] == "b"
+
+    def test_profile_list_masks_tokens(self, runner):
+        runner.invoke(cli, ["configure", "-p", "prod",
+                            "--endpoint", "https://prod:443", "--token", "supersecretkey123"])
+        result = runner.invoke(cli, ["profile", "list"])
+        assert result.exit_code == 0, result.output
+        assert "prod" in result.output
+        assert "supersecretkey123" not in result.output
+
+    def test_profile_use_and_show(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok-a-long"])
+        runner.invoke(cli, ["configure", "-p", "b", "--endpoint", "http://b:2", "--token", "tok-b-long"])
+
+        result = runner.invoke(cli, ["profile", "use", "b"])
+        assert result.exit_code == 0
+        assert "'b'" in result.output
+
+        result = runner.invoke(cli, ["profile", "show", "a"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["endpoint"] == "http://a:1"
+        assert "tok-a-long" not in data["token"]
+        assert data["default"] is False
+
+    def test_profile_use_unknown(self, runner):
+        result = runner.invoke(cli, ["profile", "use", "nope"])
+        assert result.exit_code != 0
+        assert "Unknown profile" in result.output
+
+    def test_profile_remove(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "t"])
+        runner.invoke(cli, ["configure", "-p", "b", "--endpoint", "http://b:2", "--token", "t"])
+
+        result = runner.invoke(cli, ["profile", "remove", "a", "--yes"])
+        assert result.exit_code == 0
+
+        from signoz_cli.config import load_config
+        cfg = load_config()
+        assert "a" not in cfg["profiles"]
+
+    def test_profile_remove_default_reassigns(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "t"])
+        runner.invoke(cli, ["configure", "-p", "b", "--endpoint", "http://b:2", "--token", "t"])
+
+        result = runner.invoke(cli, ["profile", "remove", "a", "--yes"])
+        assert result.exit_code == 0
+
+        from signoz_cli.config import load_config
+        assert load_config()["default"] == "b"
+
+
+def runner_invoke_cfg():  # pragma: no cover - helper kept out of test body flow
+    raise NotImplementedError
+
+
+class TestWhoami:
+    def test_whoami_with_env(self, runner, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://env:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "envtoken-1234567890")
+        result = runner.invoke(cli, ["auth", "whoami"])
+        assert result.exit_code == 0
+        assert "http://env:8080" in result.output
+        assert "envtoken-1234567890" not in result.output
+        assert "<none>" in result.output
+
+    def test_whoami_shows_selected_profile(self, runner):
+        runner.invoke(cli, ["configure", "-p", "prod",
+                            "--endpoint", "https://prod:443", "--token", "tok-prod-long"])
+        result = runner.invoke(cli, ["auth", "whoami"])
+        assert "https://prod:443" in result.output
+        assert "Profile:  prod" in result.output
+
+    def test_whoami_flag_overrides_profile_display(self, runner):
+        runner.invoke(cli, ["configure", "-p", "prod",
+                            "--endpoint", "https://prod:443", "--token", "tok-prod-long"])
+        result = runner.invoke(cli, ["auth", "whoami", "--endpoint", "http://flag:1"])
+        assert "http://flag:1" in result.output

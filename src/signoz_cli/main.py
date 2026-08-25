@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any
 
@@ -11,7 +12,14 @@ import httpx
 
 from signoz_cli import __version__
 from signoz_cli.client import SigNozApiError, SigNozClient
-from signoz_cli.config import load_config, save_config
+from signoz_cli.config import (
+    CONFIG_FILE,
+    get_profile_credentials,
+    get_profiles,
+    load_config,
+    save_config,
+    select_profile_name,
+)
 from signoz_cli.output import emit
 from signoz_cli.query import (
     build_aggregate_query_payload,
@@ -57,27 +65,59 @@ _HISTORY_TABLE_KEYS = [
 ]
 
 
-def _resolve_option(cli_value: str | None, env_var: str, config_key: str) -> str | None:
-    """Resolve a value from CLI flag > env var > config file."""
-    if cli_value:
-        return cli_value
-    env_val = __import__("os").getenv(env_var)
-    if env_val:
-        return env_val
-    return load_config().get(config_key)
+# Root-level --profile value (single-process CLI, so a module holder is safe).
+# Precedence: leaf --profile flag > root --profile flag > SIGNOZ_PROFILE > default.
+_ROOT_PROFILE: str | None = None
+
+
+def _mask_token(token: str | None) -> str:
+    if token and len(token) > 12:
+        return f"{token[:8]}...{token[-4:]}"
+    return "<not set>"
+
+
+def _resolve_credentials(
+    endpoint: str | None, token: str | None, profile_name: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve (endpoint, token): flags > env vars > selected profile > legacy keys.
+
+    Profile selection precedence: leaf --profile > root --profile >
+    SIGNOZ_PROFILE env var > the config file's default profile.
+    """
+    cfg = load_config()
+    selected = select_profile_name(
+        cfg, profile_name or _ROOT_PROFILE, os.getenv("SIGNOZ_PROFILE")
+    )
+    prof_endpoint, prof_token = get_profile_credentials(cfg, selected)
+
+    resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
+    resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
+
+    # Remember which profile was used for error messages
+    _resolve_credentials.selected_profile = (
+        selected if (prof_endpoint or prof_token) else None
+    )
+    return resolved_endpoint, resolved_token
 
 
 def _common_options(f):
-    """Decorate a command with --endpoint / --token / --format."""
+    """Decorate a command with --endpoint / --token / --profile / --format."""
     f = click.option(
         "--endpoint",
         default=None,
-        help="SigNoz instance URL (env: SIGNOZ_ENDPOINT, or ~/.signoz/config.json).",
+        help="SigNoz instance URL (env: SIGNOZ_ENDPOINT). Overrides the profile.",
     )(f)
     f = click.option(
         "--token",
         default=None,
-        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN, or ~/.signoz/config.json).",
+        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN). Overrides the profile.",
+    )(f)
+    f = click.option(
+        "-p",
+        "--profile",
+        default=None,
+        help="Named connection profile from ~/.signoz/config.json "
+        "(env: SIGNOZ_PROFILE; falls back to the default profile).",
     )(f)
     f = click.option(
         "-f",
@@ -109,16 +149,19 @@ def _time_options(default_range: str = "6h"):
     return decorate
 
 
-def _get_client(endpoint: str | None, token: str | None) -> SigNozClient:
-    resolved_endpoint = _resolve_option(endpoint, "SIGNOZ_ENDPOINT", "endpoint")
-    resolved_token = _resolve_option(token, "SIGNOZ_ACCESS_TOKEN", "token")
+def _get_client(
+    endpoint: str | None, token: str | None, profile: str | None = None
+) -> SigNozClient:
+    resolved_endpoint, resolved_token = _resolve_credentials(endpoint, token, profile)
     if not resolved_endpoint:
         raise click.UsageError(
-            "Missing endpoint. Set via --endpoint, SIGNOZ_ENDPOINT env var, or 'signoz configure'."
+            "Missing endpoint. Set via --endpoint/--profile, the SIGNOZ_ENDPOINT "
+            "env var, or 'signoz configure --profile <name> ...'."
         )
     if not resolved_token:
         raise click.UsageError(
-            "Missing token. Set via --token, SIGNOZ_ACCESS_TOKEN env var, or 'signoz configure'."
+            "Missing token. Set via --token/--profile, the SIGNOZ_ACCESS_TOKEN "
+            "env var, or 'signoz configure --profile <name> ...'."
         )
     return SigNozClient(resolved_endpoint, resolved_token)
 
@@ -139,27 +182,146 @@ def _handle_error(e: Exception) -> None:
 
 
 @click.group()
+@click.option("-p", "--profile", "root_profile", default=None,
+              help="Named connection profile to use for this invocation "
+                   "(env: SIGNOZ_PROFILE; falls back to the default profile). "
+                   "Accepted before or after the subcommand.")
 @click.version_option(version=__version__, prog_name="signoz-cli")
-def cli() -> None:
+@click.pass_context
+def cli(ctx: click.Context, root_profile: str | None) -> None:
     """SigNoz CLI -- query traces, logs, metrics, dashboards, alerts, and services.
 
     Targets SigNoz v0.138+ APIs (Query Builder v5, Dashboards v2, Alert History v2).
+
+    Use named profiles to work with multiple SigNoz instances:
+
+      signoz configure -p prod --endpoint https://signoz.example.com --token KEY
+
+      signoz -p prod logs search
     """
+    global _ROOT_PROFILE
+    _ROOT_PROFILE = root_profile
+    ctx.ensure_object(dict)
 
 
 @cli.command()
+@click.option("--profile", "-p", "profile_name", default="default", show_default=True,
+              help="Profile name to save credentials under.")
 @click.option("--endpoint", prompt="SigNoz endpoint URL", help="SigNoz instance URL.")
 @click.option(
     "--token", prompt="SigNoz API token", hide_input=True, help="SigNoz API key."
 )
-def configure(endpoint: str, token: str) -> None:
-    """Save SigNoz credentials to ~/.signoz/config.json."""
+@click.option("--set-default/--no-set-default", default=None,
+              help="Make this profile the default (default: yes for the first profile).")
+def configure(
+    profile_name: str,
+    endpoint: str,
+    token: str,
+    set_default: bool | None,
+) -> None:
+    """Save SigNoz credentials as a named profile in ~/.signoz/config.json.
+
+    Store one profile per SigNoz instance, e.g.:
+
+      signoz configure --profile local --endpoint http://localhost:8080
+
+      signoz configure --profile prod --endpoint https://signoz.example.com
+    """
     cfg = load_config()
-    cfg["endpoint"] = endpoint.rstrip("/")
-    cfg["token"] = token
+    profiles = get_profiles(cfg)
+    profiles[profile_name] = {
+        "endpoint": endpoint.rstrip("/"),
+        "token": token,
+    }
+    cfg["profiles"] = profiles
+    if set_default is True or (
+        set_default is None and cfg.get("default") is None
+    ):
+        cfg["default"] = profile_name
     save_config(cfg)
-    click.echo(f"Config saved to {__import__('pathlib').Path.home() / '.signoz' / 'config.json'} "
-               f"(endpoint: {cfg['endpoint']})")
+    click.echo(f"Profile '{profile_name}' saved to {CONFIG_FILE} "
+               f"(endpoint: {profiles[profile_name]['endpoint']})")
+    click.echo(f"Use it with: signoz -p {profile_name} <command>  "
+               f"or export SIGNOZ_PROFILE={profile_name}")
+
+
+@cli.group("profile")
+def profile() -> None:
+    """Manage named connection profiles (one per SigNoz instance)."""
+
+
+@profile.command("list")
+@click.option("-f", "--format", "fmt", type=click.Choice(["json", "table"]),
+              default="table", show_default=True, help="Output format.")
+def profile_list(fmt: str) -> None:
+    """List configured profiles."""
+    cfg = load_config()
+    profiles = get_profiles(cfg)
+    # legacy flat config acts as an implicit profile
+    rows = []
+    for name in sorted(profiles):
+        p = profiles[name]
+        rows.append({
+            "name": name,
+            "endpoint": p.get("endpoint", ""),
+            "token": _mask_token(p.get("token")),
+            "default": "*" if name == cfg.get("default") else "",
+        })
+    if not rows and cfg.get("endpoint"):
+        rows.append({
+            "name": "(legacy)",
+            "endpoint": cfg["endpoint"],
+            "token": _mask_token(cfg.get("token")),
+            "default": "*",
+        })
+    emit({"data": rows}, fmt)
+
+
+@profile.command("use")
+@click.argument("name")
+def profile_use(name: str) -> None:
+    """Set the default profile used when none is given."""
+    cfg = load_config()
+    if name not in get_profiles(cfg):
+        raise click.UsageError(f"Unknown profile '{name}'. See 'signoz profile list'.")
+    cfg["default"] = name
+    save_config(cfg)
+    click.echo(f"Default profile set to '{name}'.")
+
+
+@profile.command("show")
+@click.argument("name")
+def profile_show(name: str) -> None:
+    """Show details of a single profile (token masked)."""
+    cfg = load_config()
+    prof = get_profiles(cfg).get(name)
+    if prof is None:
+        raise click.UsageError(f"Unknown profile '{name}'. See 'signoz profile list'.")
+    emit({
+        "name": name,
+        "endpoint": prof.get("endpoint", ""),
+        "token": _mask_token(prof.get("token")),
+        "default": name == cfg.get("default"),
+    }, "json")
+
+
+@profile.command("remove")
+@click.argument("name")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def profile_remove(name: str, yes: bool) -> None:
+    """Remove a profile from the config file."""
+    cfg = load_config()
+    profiles = get_profiles(cfg)
+    if name not in profiles:
+        raise click.UsageError(f"Unknown profile '{name}'. See 'signoz profile list'.")
+    if not yes:
+        click.confirm(f"Remove profile '{name}'?", abort=True)
+    del profiles[name]
+    cfg["profiles"] = profiles
+    if cfg.get("default") == name:
+        cfg["default"] = next(iter(profiles), None)
+    save_config(cfg)
+    click.echo(f"Profile '{name}' removed.")
 
 
 @cli.group("auth")
@@ -170,21 +332,29 @@ def auth() -> None:
 @auth.command("whoami")
 @click.option("--endpoint", default=None, help="SigNoz instance URL.")
 @click.option("--token", default=None, help="SigNoz API key.")
-def auth_whoami(endpoint: str | None, token: str | None) -> None:
-    """Show current configuration (endpoint, token masked)."""
-    ep = _resolve_option(endpoint, "SIGNOZ_ENDPOINT", "endpoint")
-    tok = _resolve_option(token, "SIGNOZ_ACCESS_TOKEN", "token")
-    masked = f"{tok[:8]}...{tok[-4:]}" if tok and len(tok) > 12 else "<not set>"
+@click.option("-p", "--profile", "profile_name", default=None,
+              help="Named connection profile to inspect.")
+def auth_whoami(endpoint: str | None, token: str | None, profile_name: str | None) -> None:
+    """Show effective configuration (endpoint, token masked).
+
+    Resolution order: flags > env vars > selected profile > legacy config keys.
+    """
+    ep, tok = _resolve_credentials(endpoint, token, profile_name)
+    cfg = load_config()
+    selected = select_profile_name(cfg, profile_name, os.getenv("SIGNOZ_PROFILE"))
     click.echo(f"Endpoint: {ep or '<not set>'}")
-    click.echo(f"Token:    {masked}")
+    click.echo(f"Token:    {_mask_token(tok)}")
+    click.echo(f"Profile:  {selected or '<none>'}")
+    click.echo(f"Config:   {CONFIG_FILE}")
 
 
 @auth.command("verify")
 @_common_options
-def auth_verify(endpoint: str | None, token: str | None, fmt: str) -> None:
+def auth_verify(endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None,) -> None:
     """Verify the API key against the live instance."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.verify()
         emit(data, fmt)
     except Exception as e:
@@ -208,11 +378,12 @@ def metrics() -> None:
     "--offset", type=int, default=0, show_default=True, help="Pagination offset."
 )
 def metrics_list_keys(
-    endpoint: str | None, token: str | None, fmt: str, limit: int, offset: int
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, limit: int, offset: int
 ) -> None:
     """List all available metric keys."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.list_metric_keys()
         keys = _extract_attribute_keys(data)
         page = keys[offset : offset + limit]
@@ -229,11 +400,12 @@ def metrics_list_keys(
 @_common_options
 @click.argument("search_text")
 def metrics_search(
-    endpoint: str | None, token: str | None, fmt: str, search_text: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, search_text: str
 ) -> None:
     """Search metrics by text (substring autocomplete)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.search_metric_by_text(search_text)
         emit(data, fmt)
     except Exception as e:
@@ -244,11 +416,12 @@ def metrics_search(
 @_common_options
 @click.option("--search", default="", help="Filter field names by text.")
 def metrics_fields(
-    endpoint: str | None, token: str | None, fmt: str, search: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, search: str
 ) -> None:
     """List available field names for metric queries."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_metrics_available_fields(search)
         emit(data, fmt)
     except Exception as e:
@@ -260,11 +433,12 @@ def metrics_fields(
 @click.argument("field_name")
 @click.option("--search", default="", help="Filter values by text.")
 def metrics_field_values(
-    endpoint: str | None, token: str | None, fmt: str, field_name: str, search: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, field_name: str, search: str
 ) -> None:
     """Get available values for a metric field."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_metrics_field_values(field_name, search)
         emit(data, fmt)
     except Exception as e:
@@ -288,11 +462,12 @@ def alerts() -> None:
     "--offset", type=int, default=0, show_default=True, help="Pagination offset."
 )
 def alerts_list(
-    endpoint: str | None, token: str | None, fmt: str, limit: int, offset: int
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, limit: int, offset: int
 ) -> None:
     """List all active alerts."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         raw = client.list_alerts()
         alerts_data = _extract_alerts(raw)
         page = alerts_data[offset : offset + limit]
@@ -308,10 +483,11 @@ def alerts_list(
 @alerts.command("get")
 @_common_options
 @click.argument("rule_id")
-def alerts_get(endpoint: str | None, token: str | None, fmt: str, rule_id: str) -> None:
+def alerts_get(endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, rule_id: str) -> None:
     """Get details of a specific alert rule."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_alert(rule_id)
         emit(data, fmt)
     except Exception as e:
@@ -348,6 +524,7 @@ def alerts_history(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     rule_id: str,
     time_range: str | None,
     start: int | None,
@@ -360,7 +537,7 @@ def alerts_history(
 ) -> None:
     """Get alert history timeline for a rule (v2 API with cursor pagination)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         data = client.get_alert_history_timeline(
             rule_id,
@@ -385,6 +562,7 @@ def alerts_history_stats(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     rule_id: str,
     time_range: str | None,
     start: int | None,
@@ -392,7 +570,7 @@ def alerts_history_stats(
 ) -> None:
     """Get aggregate statistics for a rule's history (v2 API)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="24h")
         data = client.get_alert_history_stats(rule_id, s, e)
         emit(data, fmt)
@@ -408,6 +586,7 @@ def alerts_overall_status(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     rule_id: str,
     time_range: str | None,
     start: int | None,
@@ -415,7 +594,7 @@ def alerts_overall_status(
 ) -> None:
     """Get overall status of a rule over a time range (v2 API)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="24h")
         data = client.get_alert_history_overall_status(rule_id, s, e)
         emit(data, fmt)
@@ -431,6 +610,7 @@ def alerts_top_contributors(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     rule_id: str,
     time_range: str | None,
     start: int | None,
@@ -438,7 +618,7 @@ def alerts_top_contributors(
 ) -> None:
     """Get top contributing label sets for a rule's history (v2 API)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="24h")
         data = client.get_alert_history_top_contributors(rule_id, s, e)
         emit(_stringify_labels(data), fmt, table_keys=["fingerprint", "labels", "count"])
@@ -467,13 +647,14 @@ def dashboards_list(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     limit: int,
     offset: int,
     query: str | None,
 ) -> None:
     """List dashboards (v2 API with pagination and search)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         raw = client.list_dashboards_v2(limit=limit, offset=offset, query=query)
         # Response shape: {"status", "data": {"dashboards": [...], "total": N, ...}}
         payload = raw.get("data", {}) if isinstance(raw, dict) else {}
@@ -506,11 +687,12 @@ def dashboards_list(
 @_common_options
 @click.argument("dashboard_id")
 def dashboards_get(
-    endpoint: str | None, token: str | None, fmt: str, dashboard_id: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, dashboard_id: str
 ) -> None:
     """Get full details of a dashboard by id (v2 API)."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_dashboard_v2(dashboard_id)
         emit(data, fmt)
     except Exception as e:
@@ -521,13 +703,14 @@ def dashboards_get(
 @_common_options
 @click.argument("json_file", type=click.Path(exists=True))
 def dashboards_create(
-    endpoint: str | None, token: str | None, fmt: str, json_file: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, json_file: str
 ) -> None:
     """Create a dashboard from a JSON file (v2 spec schema)."""
     try:
         with open(json_file) as f:
             dashboard = json.load(f)
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.create_dashboard_v2(dashboard)
         emit(data, fmt)
     except Exception as e:
@@ -539,13 +722,14 @@ def dashboards_create(
 @click.argument("dashboard_id")
 @click.argument("json_file", type=click.Path(exists=True))
 def dashboards_update(
-    endpoint: str | None, token: str | None, fmt: str, dashboard_id: str, json_file: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, dashboard_id: str, json_file: str
 ) -> None:
     """Replace a dashboard from a JSON file (full PUT, v2 API)."""
     try:
         with open(json_file) as f:
             dashboard = json.load(f)
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.update_dashboard_v2(dashboard_id, dashboard)
         emit(data or {"status": "updated"}, fmt)
     except Exception as e:
@@ -557,7 +741,8 @@ def dashboards_update(
 @click.argument("dashboard_id")
 @click.argument("json_file", type=click.Path(exists=True))
 def dashboards_patch(
-    endpoint: str | None, token: str | None, fmt: str, dashboard_id: str, json_file: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, dashboard_id: str, json_file: str
 ) -> None:
     """Apply partial updates to a dashboard (JSON-Patch array, v2 API).
 
@@ -569,7 +754,7 @@ def dashboards_patch(
             patches = json.load(f)
         if not isinstance(patches, list):
             raise click.UsageError("Patch file must contain a JSON array of operations.")
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.patch_dashboard_v2(dashboard_id, patches)
         emit(data or {"status": "patched"}, fmt)
     except Exception as e:
@@ -581,13 +766,14 @@ def dashboards_patch(
 @click.argument("dashboard_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 def dashboards_delete(
-    endpoint: str | None, token: str | None, fmt: str, dashboard_id: str, yes: bool
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, dashboard_id: str, yes: bool
 ) -> None:
     """Delete a dashboard (v2 API)."""
     try:
         if not yes:
             click.confirm(f"Delete dashboard {dashboard_id}?", abort=True)
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.delete_dashboard_v2(dashboard_id)
         emit(data, fmt)
     except Exception as e:
@@ -613,13 +799,14 @@ def services_list(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     time_range: str | None,
     start: int | None,
     end: int | None,
 ) -> None:
     """List all services within a time range."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns")
         data = client.list_services(str(s), str(e))
         emit(data, fmt)
@@ -638,6 +825,7 @@ def services_top_operations(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str,
     time_range: str | None,
     start: int | None,
@@ -646,7 +834,7 @@ def services_top_operations(
 ) -> None:
     """Get top operations for a specific service."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns")
         parsed_tags = json.loads(tags) if tags else None
         data = client.get_service_top_operations(
@@ -692,6 +880,7 @@ def logs_search(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     query: str | None,
     service: str | None,
     severity: str | None,
@@ -704,7 +893,7 @@ def logs_search(
 ) -> None:
     """Search logs with flexible filtering across all services."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         filter_expr = _build_log_filter(query, service, severity, search_text)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h")
         payload = build_logs_query_payload(
@@ -727,6 +916,7 @@ def logs_errors(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str | None,
     time_range: str | None,
     start: int | None,
@@ -735,7 +925,7 @@ def logs_errors(
 ) -> None:
     """Get logs with ERROR or FATAL severity."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         parts = ["severity_text IN ['ERROR', 'FATAL']"]
         if service:
             parts.append(f"service.name = '{service}'")
@@ -761,6 +951,7 @@ def logs_by_service(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str,
     severity: str | None,
     search_text: str | None,
@@ -771,7 +962,7 @@ def logs_by_service(
 ) -> None:
     """Search logs for a specific service."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         filter_expr = _build_log_filter(None, service, severity, search_text)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         payload = build_logs_query_payload(s, e, filter_expr, limit=limit)
@@ -811,6 +1002,7 @@ def logs_aggregate(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     aggregation: str,
     aggregate_on: str | None,
     group_by: str | None,
@@ -825,7 +1017,7 @@ def logs_aggregate(
 ) -> None:
     """Aggregate logs (count, avg, sum, percentiles, etc.) with optional grouping."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         if aggregation not in _NO_FIELD_AGGREGATIONS and not aggregate_on:
             raise click.UsageError(
                 f"--aggregate-on is required for '{aggregation}' aggregation."
@@ -858,10 +1050,11 @@ def logs_aggregate(
 @logs.command("fields")
 @_common_options
 @click.option("--search", default="", help="Filter field names by text.")
-def logs_fields(endpoint: str | None, token: str | None, fmt: str, search: str) -> None:
+def logs_fields(endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, search: str) -> None:
     """List available field names for log queries."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_logs_available_fields(search)
         emit(data, fmt)
     except Exception as e:
@@ -873,11 +1066,12 @@ def logs_fields(endpoint: str | None, token: str | None, fmt: str, search: str) 
 @click.argument("field_name")
 @click.option("--search", default="", help="Filter values by text.")
 def logs_field_values(
-    endpoint: str | None, token: str | None, fmt: str, field_name: str, search: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, field_name: str, search: str
 ) -> None:
     """Get available values for a log field."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_logs_field_values(field_name, search)
         emit(data, fmt)
     except Exception as e:
@@ -915,6 +1109,7 @@ def traces_search(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str | None,
     operation: str | None,
     error_filter: str | None,
@@ -927,7 +1122,7 @@ def traces_search(
 ) -> None:
     """Search traces with flexible filtering."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         filter_expr = _build_trace_filter(None, service, operation, error_filter)
         if min_duration is not None:
             filter_expr = _append_filter(filter_expr, f"durationNano >= {min_duration}")
@@ -962,6 +1157,7 @@ def traces_by_service(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str,
     operation: str | None,
     error_filter: str | None,
@@ -974,7 +1170,7 @@ def traces_by_service(
 ) -> None:
     """Search traces for a specific service."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         filter_expr = _build_trace_filter(None, service, operation, error_filter)
         if min_duration is not None:
             filter_expr = _append_filter(filter_expr, f"durationNano >= {min_duration}")
@@ -998,6 +1194,7 @@ def traces_get(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     trace_id: str,
     time_range: str | None,
     start: int | None,
@@ -1005,7 +1202,7 @@ def traces_get(
 ) -> None:
     """Get all spans of a trace by trace ID."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         filter_expr = f"traceID = '{trace_id}'"
         payload = build_traces_query_payload(s, e, filter_expr, limit=1000)
@@ -1026,6 +1223,7 @@ def traces_errors(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     service: str | None,
     time_range: str | None,
     start: int | None,
@@ -1034,7 +1232,7 @@ def traces_errors(
 ) -> None:
     """Find error spans in traces."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         parts = ["hasError = true"]
         if service:
             parts.append(f"service.name in ['{service}']")
@@ -1082,6 +1280,7 @@ def traces_aggregate(
     endpoint: str | None,
     token: str | None,
     fmt: str,
+    profile: str | None,
     aggregation: str,
     aggregate_on: str | None,
     group_by: str | None,
@@ -1097,7 +1296,7 @@ def traces_aggregate(
 ) -> None:
     """Aggregate traces (count, avg, percentiles, etc.) with optional grouping."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         if aggregation not in _NO_FIELD_AGGREGATIONS and not aggregate_on:
             raise click.UsageError(
                 f"--aggregate-on is required for '{aggregation}' aggregation."
@@ -1133,11 +1332,12 @@ def traces_aggregate(
 @_common_options
 @click.option("--search", default="", help="Filter field names by text.")
 def traces_fields(
-    endpoint: str | None, token: str | None, fmt: str, search: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, search: str
 ) -> None:
     """List available field names for trace queries."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_trace_available_fields(search)
         emit(data, fmt)
     except Exception as e:
@@ -1149,11 +1349,12 @@ def traces_fields(
 @click.argument("field_name")
 @click.option("--search", default="", help="Filter values by text.")
 def traces_field_values(
-    endpoint: str | None, token: str | None, fmt: str, field_name: str, search: str
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, field_name: str, search: str
 ) -> None:
     """Get available values for a trace field."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.get_trace_field_values(field_name, search)
         emit(data, fmt)
     except Exception as e:
@@ -1168,12 +1369,13 @@ def traces_field_values(
 @cli.command("query")
 @_common_options
 @click.argument("json_file", type=click.Path(exists=True))
-def query_raw(endpoint: str | None, token: str | None, fmt: str, json_file: str) -> None:
+def query_raw(endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, json_file: str) -> None:
     """Execute a raw Query Builder v5 query from a JSON file."""
     try:
         with open(json_file) as f:
             payload = json.load(f)
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt)
     except Exception as e:

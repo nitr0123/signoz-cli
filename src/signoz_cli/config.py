@@ -1,4 +1,19 @@
-"""Config file support for SigNoz CLI (~/.signoz/config.json)."""
+"""Config file support for SigNoz CLI (~/.signoz/config.json).
+
+Supports named connection profiles for working with multiple SigNoz
+instances::
+
+    {
+      "default": "prod",
+      "profiles": {
+        "prod":  {"endpoint": "https://signoz.example.com", "token": "..."},
+        "local": {"endpoint": "http://localhost:8080", "token": "..."}
+      }
+    }
+
+Legacy flat configs ({"endpoint": ..., "token": ...}) are still readable and
+act as an implicit default profile.
+"""
 
 from __future__ import annotations
 
@@ -26,3 +41,26 @@ def save_config(data: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
     CONFIG_FILE.chmod(0o600)
+
+
+def get_profiles(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the profiles mapping from a loaded config (possibly empty)."""
+    profiles = cfg.get("profiles")
+    return profiles if isinstance(profiles, dict) else {}
+
+
+def select_profile_name(
+    cfg: dict[str, Any], requested: str | None = None, env_var_value: str | None = None
+) -> str | None:
+    """Pick a profile name: requested > env var > config default."""
+    return requested or env_var_value or cfg.get("default")
+
+
+def get_profile_credentials(
+    cfg: dict[str, Any], profile_name: str | None
+) -> tuple[str | None, str | None]:
+    """Return (endpoint, token) stored under a profile, else legacy flat keys."""
+    prof = get_profiles(cfg).get(profile_name or "", {})
+    endpoint = prof.get("endpoint") or cfg.get("endpoint")
+    token = prof.get("token") or cfg.get("token")
+    return endpoint, token

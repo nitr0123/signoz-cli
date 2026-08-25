@@ -25,6 +25,7 @@ class SigNozClient:
         token: str,
         timeout: float = 120.0,
         verify: bool = True,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.token = token
@@ -35,6 +36,7 @@ class SigNozClient:
                 "SIGNOZ-API-KEY": token,
                 "Content-Type": "application/json",
             },
+            transport=transport,
         )
 
     # ------------------------------------------------------------------
