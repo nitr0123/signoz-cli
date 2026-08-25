@@ -64,11 +64,16 @@ Config file lives at `~/.signoz/config.json` (override the directory with
 
 ## Output Formats
 
-Every query command supports `--format json` (machine-readable) or `--format table` (default).
+Every query command supports `-f/--format table|json`, plus a `--json`
+shorthand for machine-readable output (per clig.dev):
 
 ```shell
-signoz alerts list --format json
+signoz alerts list --json | jq '.[0]'
+signoz logs search -f json
 ```
+
+Table output is rendered with rich; pipe-safe JSON goes to stdout and errors to
+stderr, so both play well in scripts and CI.
 
 ## Usage
 

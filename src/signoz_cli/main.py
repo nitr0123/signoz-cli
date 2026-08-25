@@ -196,7 +196,9 @@ def _handle_error(e: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]},
+             epilog="Docs: https://signoz.io/docs/  |  "
+                    "Issues: https://github.com/SigNoz/signoz/issues")
 @click.option("-p", "--profile", "root_profile", default=None,
               help="Named connection profile to use for this invocation "
                    "(env: SIGNOZ_PROFILE; falls back to the default profile). "
@@ -213,6 +215,13 @@ def cli(ctx: click.Context, root_profile: str | None) -> None:
       signoz configure -p prod --endpoint https://signoz.example.com --token KEY
 
       signoz -p prod logs search
+
+    \b
+    Examples:
+      signoz logs search --service payment-svc --severity ERROR --time-range 1h
+      signoz traces aggregate --aggregation p99 --aggregate-on durationNano --group-by "service.name"
+      signoz dashboards list --json
+      signoz alerts history <rule-uuid> --time-range 24h
     """
     global _ROOT_PROFILE
     _ROOT_PROFILE = root_profile
