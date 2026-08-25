@@ -100,8 +100,14 @@ def _resolve_credentials(
     return resolved_endpoint, resolved_token
 
 
+def _set_json_flag(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    """Eager callback: --json is shorthand for -f json (clig.dev output rule)."""
+    if value:
+        ctx.params["fmt"] = "json"
+
+
 def _common_options(f):
-    """Decorate a command with --endpoint / --token / --profile / --format."""
+    """Decorate a command with --endpoint / --token / --profile / --format / --json."""
     f = click.option(
         "--endpoint",
         default=None,
@@ -110,7 +116,8 @@ def _common_options(f):
     f = click.option(
         "--token",
         default=None,
-        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN). Overrides the profile.",
+        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN). Overrides the profile. "
+        "Prefer env vars or profiles over flags to keep tokens out of shell history.",
     )(f)
     f = click.option(
         "-p",
@@ -127,6 +134,14 @@ def _common_options(f):
         default="table",
         show_default=True,
         help="Output format.",
+    )(f)
+    f = click.option(
+        "--json",
+        is_flag=True,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_json_flag,
+        help="Shorthand for -f json.",
     )(f)
     return f
 
@@ -253,6 +268,8 @@ def profile() -> None:
 @profile.command("list")
 @click.option("-f", "--format", "fmt", type=click.Choice(["json", "table"]),
               default="table", show_default=True, help="Output format.")
+@click.option("--json", is_flag=True, expose_value=False, is_eager=True,
+              callback=_set_json_flag, help="Shorthand for -f json.")
 def profile_list(fmt: str) -> None:
     """List configured profiles."""
     cfg = load_config()
