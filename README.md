@@ -203,6 +203,31 @@ signoz services list --time-range 24h
 signoz services top-operations payment-svc --time-range 2h
 ```
 
+### Metrics (values)
+
+```shell
+signoz metrics query app.payments.total --time-aggregation sum --time-range 1h
+signoz metrics query system.cpu.time --group-by "host.name"
+signoz promql 'sum({__name__="app.payments.total"})' --time-range 1h
+```
+
+OTel metrics keep dotted names, so PromQL queries need brace selectors.
+
+### More
+
+```shell
+signoz traces detail TRACE_ID        # spans with attributes/events
+signoz logs tail --service payment-svc
+signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test
+signoz channels list                 # admin only
+signoz service-accounts list         # admin only
+signoz views list                    # saved views
+signoz logs search --all             # auto-paginate everything
+signoz logs search -f csv -o out.csv # CSV to file
+signoz --timeout 30 --insecure auth verify   # TLS/proxy options; retries on 429/5xx are automatic
+eval "$(_SIGNOZ_COMPLETE=bash_source signoz)"  # bash completion (zsh/fish variants too)
+```
+
 ### Raw Query Builder v5
 
 ```shell

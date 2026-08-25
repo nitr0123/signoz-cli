@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.3.0 (2026-08-26)
+
+### Added
+
+- `metrics query` - query metric values over time (v5 time series) with
+  time/space aggregation, temporality control and group-by; server warnings
+  surfaced on stderr
+- `signoz promql` and `signoz sql` raw query passthroughs
+- `traces detail` - full waterfall spans with attributes/events
+- `logs tail` - poll-based follow mode
+- Alert rule management: create/update/patch/delete/test (patch ops merged
+  client-side)
+- Notification channel management (admin), saved-view commands,
+  service-account admin commands (`service-accounts list/create/delete/roles`)
+- Auto-pagination: `--all` on logs search, traces search, dashboards list,
+  alerts history
+- Resilience: automatic retry/backoff on 429/5xx honoring Retry-After,
+  `--timeout`, `--insecure` (+ SIGNOZ_TIMEOUT / SIGNOZ_INSECURE env vars)
+- CSV output format and `-o/--output FILE`
+- Release automation: tag pushes build a wheel and attach it to the Forgejo
+  release
+- mypy type checking in CI; marker-gated live integration test suite
+
 ## v0.2.1 (2026-08-25)
 
 ### Added
