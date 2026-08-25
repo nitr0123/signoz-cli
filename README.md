@@ -16,16 +16,21 @@ Built for the current SigNoz API surface:
 
 ### Pinned releases (recommended)
 
-Install a specific release directly from the Forgejo release assets:
-
-```shell
-pip install https://git.example.com/hamza/signoz-cli/releases/download/v0.2.1/signoz_cli-0.2.1-py3-none-any.whl
-```
-
-Or pin to a git tag (any machine with SSH access to the Forgejo host):
+Install a specific immutable release tag (any machine with SSH access to the
+Forgejo host):
 
 ```shell
 pip install git+ssh://forgejo/hamza/signoz-cli.git@v0.2.1
+```
+
+Or download the release wheel — note the instance sits behind an SSO wall, so
+downloads need a Forgejo API token:
+
+```shell
+curl -sL -H "Authorization: token $FORGEJO_TOKEN" \
+  -o signoz_cli-0.2.1-py3-none-any.whl \
+  "http://localhost:3001/api/v1/repos/hamza/signoz-cli/releases"  # see releases page for asset URL
+pip install ./signoz_cli-0.2.1-py3-none-any.whl
 ```
 
 Tags are immutable — `@v0.2.1` always gives you exactly the v0.2.1 build.
