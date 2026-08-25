@@ -159,3 +159,22 @@ class TestWhoami:
                             "--endpoint", "https://prod:443", "--token", "tok-prod-long"])
         result = runner.invoke(cli, ["auth", "whoami", "--endpoint", "http://flag:1"])
         assert "http://flag:1" in result.output
+
+
+class TestJsonFlag:
+    def test_json_shorthand_outputs_parseable_json(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])
+        result = runner.invoke(cli, ["profile", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"][0]["name"] == "a"
+
+    def test_format_flag_still_works_alone(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])
+        result = runner.invoke(cli, ["profile", "list", "-f", "json"])
+        assert json.loads(result.output)["data"][0]["endpoint"] == "http://a:1"
+
+    def test_profile_show_always_json(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])
+        result = runner.invoke(cli, ["profile", "show", "a"])
+        assert json.loads(result.output)["endpoint"] == "http://a:1"
