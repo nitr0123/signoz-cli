@@ -22,28 +22,45 @@ pip install -e '.[dev]'
 
 ## Configuration
 
-Set your SigNoz endpoint and API token via environment variables (recommended) or CLI flags:
+Credentials are resolved in this order:
 
-```shell
-export SIGNOZ_ENDPOINT="http://localhost:8080"
-export SIGNOZ_ACCESS_TOKEN="your-api-key-here"
-```
-
-Alternatively, pass them on every command:
-
-```shell
-signoz --endpoint https://... --token your-key ...
-```
-
-Or save them once:
-
-```shell
-signoz configure --endpoint http://localhost:8080 --token <key>
-```
+1. Command-line flags (`--endpoint`, `--token`)
+2. Environment variables (`SIGNOZ_ENDPOINT`, `SIGNOZ_ACCESS_TOKEN`)
+3. The selected **profile** in `~/.signoz/config.json` (see below)
+4. Legacy flat config keys (older configs without profiles)
 
 On self-hosted SigNoz, create a key under **Settings → Service Accounts → Keys**
 (the account needs at least the Viewer role; Admin creates service accounts).
 Verify credentials any time with `signoz auth verify`.
+
+### Multiple SigNoz instances (profiles)
+
+Modelled on the aws-cli profile pattern. Store one profile per instance:
+
+```shell
+signoz configure -p local --endpoint http://localhost:8080 --token KEY1
+signoz configure -p prod  --endpoint https://signoz.example.com --token KEY2
+```
+
+Then use them in any of these equivalent ways:
+
+```shell
+signoz -p prod logs search                 # root flag (before subcommand)
+signoz logs search -p prod --limit 10      # leaf flag
+export SIGNOZ_PROFILE=prod                 # environment variable
+signoz profile use prod                    # set the default for future calls
+```
+
+Manage profiles with:
+
+```shell
+signoz profile list          # shows endpoints + masked tokens, marks default
+signoz profile show prod     # single profile details
+signoz profile remove prod   # delete a profile
+```
+
+Config file lives at `~/.signoz/config.json` (override the directory with
+`SIGNOZ_CONFIG_DIR`) and is written with `0600` permissions.
 
 ## Output Formats
 
