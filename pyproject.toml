@@ -1,6 +1,6 @@
 [project]
 name = "signoz-cli"
-version = "0.2.1"
+version = "0.3.0"
 description = "SigNoz CLI - query traces, logs, metrics, alerts, dashboards and services from SigNoz 0.138+"
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,6 +29,10 @@ packages = ["src/signoz_cli"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: integration tests that need a running SigNoz instance",
+]
 
 [tool.ruff]
 line-length = 100
@@ -37,3 +41,9 @@ target-version = "py310"
 [tool.ruff.lint.per-file-ignores]
 # CLI commands intentionally funnel all errors through _handle_error
 "src/signoz_cli/main.py" = ["BLE001"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = ["tests/"]

@@ -312,7 +312,13 @@ class SigNozClient:
         return self._post("/api/v5/query_range", json_body=payload)
 
     def get_trace_detail(self, trace_id: str, start: int, end: int) -> Any:
-        return self._get(f"/api/v3/trace/{trace_id}", params={"start": str(start), "end": str(end)})
+        """POST /api/v4/traces/{id}/waterfall — full spans incl. attributes."""
+        resp = self._client.post(
+            f"{self.endpoint}/api/v4/traces/{trace_id}/waterfall"
+            f"?start={start}&end={end}",
+            json={},
+        )
+        return self._parse(resp)
 
     # ------------------------------------------------------------------
     # Alert rule management (v2)

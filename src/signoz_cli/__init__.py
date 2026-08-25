@@ -1,3 +1,3 @@
 """SigNoz CLI -- query traces, logs, metrics, alerts, dashboards and services from SigNoz 0.138+."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"

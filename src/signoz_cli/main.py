@@ -97,6 +97,45 @@ def _is_supported_server(version: str) -> bool:
     return padded[: len(SUPPORTED_SIGNOZ_MIN)] >= SUPPORTED_SIGNOZ_MIN
 
 
+def _apply_json_patch(obj: Any, ops: list[dict[str, Any]]) -> Any:
+    """Apply a subset of RFC-6902 ops (add/replace/remove) to nested dicts."""
+    import copy
+
+    result = copy.deepcopy(obj)
+    for op in ops:
+        action = op.get("op")
+        path = op.get("path", "")
+        parts = [p.replace("~1", "/").replace("~0", "~") for p in path.strip("/").split("/") if p != ""]
+        if not parts:
+            if action == "replace":
+                result = op.get("value")
+                continue
+            raise click.UsageError(f"Unsupported patch on root: {op}")
+        parent = result
+        for p in parts[:-1]:
+            parent = parent[p] if isinstance(parent, list) else parent.setdefault(p, {})
+        last = parts[-1]
+        if action in ("add", "replace"):
+            if last == "-" and isinstance(parent, list):
+                parent.append(op.get("value"))
+            elif isinstance(parent, dict):
+                parent[last] = op.get("value")
+            elif isinstance(parent, list):
+                idx = int(last)
+                if action == "add":
+                    parent.insert(idx, op.get("value"))
+                else:
+                    parent[idx] = op.get("value")
+        elif action == "remove":
+            if isinstance(parent, dict):
+                parent.pop(last, None)
+            elif isinstance(parent, list):
+                parent.pop(int(last))
+        else:
+            raise click.UsageError(f"Unsupported patch op '{action}'.")
+    return result
+
+
 def _mask_token(token: str | None) -> str:
     if token and len(token) > 12:
         return f"{token[:8]}...{token[-4:]}"
@@ -120,10 +159,6 @@ def _resolve_credentials(
     resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
     resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
 
-    # Remember which profile was used for error messages
-    _resolve_credentials.selected_profile = (
-        selected if (prof_endpoint or prof_token) else None
-    )
     return resolved_endpoint, resolved_token
 
 
@@ -185,6 +220,14 @@ def _common_options(f):
         help="Shorthand for -f json.",
     )(f)
     f = click.option(
+        "--csv",
+        is_flag=True,
+        expose_value=False,
+        is_eager=True,
+        callback=lambda ctx, param, value: ctx.params.update({"fmt": "csv"}) if value else None,
+        help="Shorthand for -f csv.",
+    )(f)
+    f = click.option(
         "--timeout",
         type=float,
         default=None,
@@ -238,10 +281,11 @@ def _get_client(
             "env var, or 'signoz configure --profile <name> ...'."
         )
 
-    timeout = (
-        _TIMEOUT_HOLDER["value"]
+    env_timeout = os.getenv("SIGNOZ_TIMEOUT")
+    timeout: float = (
+        float(_TIMEOUT_HOLDER["value"])
         if _TIMEOUT_HOLDER["value"] is not None
-        else (float(os.getenv("SIGNOZ_TIMEOUT")) if os.getenv("SIGNOZ_TIMEOUT") else 120.0)
+        else (float(env_timeout) if env_timeout else 120.0)
     )
     insecure = _INSECURE_HOLDER["value"] or os.getenv("SIGNOZ_INSECURE", "") == "1"
 
@@ -831,7 +875,12 @@ def dashboards_list(
                 page_payload = raw_page.get("data", {}) if isinstance(raw_page, dict) else {}
                 page_items = (page_payload.get("dashboards") or []) if isinstance(page_payload, dict) else []
                 items.extend(page_items)
-                if not page_items or (isinstance(page_payload, dict) and page_payload.get("total") is not None and offset + len(page_items) >= int(page_payload.get("total"))):
+                page_total = page_payload.get("total") if isinstance(page_payload, dict) else None
+                if not page_items or (
+                    isinstance(page_payload, dict)
+                    and page_total is not None
+                    and offset + len(page_items) >= int(page_total)
+                ):
                     break
         simplified = [_dashboard_summary(d) for d in items]
         result: dict[str, Any] = {"data": simplified}
@@ -1647,11 +1696,15 @@ def metrics_query(
 ) -> None:
     """Query metric VALUES over time (v5 time series).
 
+    Notes: rate/increase need enough samples in the window. Gauge metrics
+    default to Unspecified temporality, counters to Cumulative -- override
+    with --temporality Delta for delta counters.
+
     Examples:
 
-      signoz metrics query app.payments.total --time-aggregation rate
+      signoz metrics query app.payments.total --time-aggregation sum
 
-      signoz metrics query system.cpu.time -g "host.name"
+      signoz metrics query system.cpu.time --group-by "host.name"
     """
     try:
         client = _get_client(endpoint, token, profile)
@@ -1694,7 +1747,9 @@ def promql_query(
 ) -> None:
     """Run a PromQL query against metrics.
 
-    Example: signoz promql 'rate(signoz_calls_total[5m])' --time-range 1h
+    OTel metrics keep dotted names: use brace selectors, e.g.
+
+      signoz promql 'sum({__name__="app.payments.total"})' --time-range 1h
     """
     try:
         client = _get_client(endpoint, token, profile)
@@ -1756,12 +1811,36 @@ def traces_detail(
     start: int | None,
     end: int | None,
 ) -> None:
-    """Full span detail for a trace: attributes, events, exceptions."""
+    """Full span detail for a trace: attributes, events, exceptions.
+
+    Table mode shows one row per span (indented by depth); --format json
+    returns the complete waterfall payload.
+    """
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         data = client.get_trace_detail(trace_id, s, e)
-        emit(data, fmt)
+        if fmt == "table":
+            spans = (data.get("data") or {}).get("spans") or []
+            rows = []
+            for span in spans:
+                depth = int(span.get("level") or 0)
+                res = span.get("resource") or {}
+                attrs = span.get("attributes") or {}
+                dur_ms = int(span.get("duration_nano", 0)) / 1e6
+                rows.append({
+                    "span": f"{'  ' * depth}{span.get('name', '')}",
+                    "service": res.get("service.name", ""),
+                    "kind": span.get("kind_string", ""),
+                    "duration_ms": round(dur_ms, 2),
+                    "error": "Y" if span.get("has_error") else "",
+                    "attrs": ", ".join(f"{k}={v}" for k, v in list(attrs.items())[:4]),
+                    "events": len(span.get("events") or []),
+                })
+            emit({"data": rows}, "table",
+                 table_keys=["span", "service", "duration_ms", "error", "attrs", "events"])
+        else:
+            emit(data, fmt)
     except Exception as ex:
         _handle_error(ex)
 
@@ -1875,14 +1954,21 @@ def alerts_update(endpoint: str | None, token: str | None, fmt: str,
 @click.argument("json_file", type=click.Path(exists=True))
 def alerts_patch(endpoint: str | None, token: str | None, fmt: str,
                  profile: str | None, rule_id: str, json_file: str) -> None:
-    """Apply partial updates to a rule (JSON-Patch array)."""
+    """Apply partial updates to a rule (JSON-Patch ops merged client-side)."""
     try:
         with open(json_file) as f:
             patches = json.load(f)
         if not isinstance(patches, list):
             raise click.UsageError("Patch file must contain a JSON array.")
         client = _get_client(endpoint, token, profile)
-        data = client.patch_rule(rule_id, patches)
+        current = client.get_alert(rule_id)
+        rule = current.get("data", current) if isinstance(current, dict) else current
+        updated = _apply_json_patch(rule, patches)
+        # strip server-managed fields the PUT schema rejects
+        for key in ("id", "createdAt", "updatedAt", "updatedBy", "createdBy"):
+            if isinstance(updated, dict):
+                updated.pop(key, None)
+        data = client.update_rule(rule_id, updated)
         emit(data or {"status": "patched"}, fmt)
     except Exception as e:
         _handle_error(e)

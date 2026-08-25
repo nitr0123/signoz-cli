@@ -20,9 +20,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev]' mypy
       - name: Ruff check
         run: ruff check .
+      - name: Mypy
+        run: mypy src/signoz_cli/
 
   test:
     name: Tests (py${{ matrix.python-version }})

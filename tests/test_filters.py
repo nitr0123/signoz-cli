@@ -1,5 +1,7 @@
 """Tests for filter builders and dashboard summary helpers in main.py."""
 
+import pytest
+
 from signoz_cli.main import (
     _build_log_filter,
     _build_trace_filter,
@@ -83,3 +85,35 @@ class TestDashboardSummary:
 
     def test_non_dict(self):
         assert _dashboard_summary("nope") == {}
+
+
+class TestApplyJsonPatch:
+    def _patch(self):
+        from signoz_cli.main import _apply_json_patch
+        return _apply_json_patch
+
+    def test_add_and_replace_nested(self):
+        f = self._patch()
+        obj = {"a": {"b": 1}, "disabled": False}
+        out = f(obj, [
+            {"op": "replace", "path": "/disabled", "value": True},
+            {"op": "add", "path": "/a/c", "value": 2},
+        ])
+        assert out["disabled"] is True
+        assert out["a"]["c"] == 2
+        assert obj["disabled"] is False  # original untouched
+
+    def test_remove(self):
+        f = self._patch()
+        out = f({"a": 1, "b": 2}, [{"op": "remove", "path": "/b"}])
+        assert out == {"a": 1}
+
+    def test_array_append_with_dash(self):
+        f = self._patch()
+        out = f({"tags": [1]}, [{"op": "add", "path": "/tags/-", "value": 2}])
+        assert out["tags"] == [1, 2]
+
+    def test_rejects_unknown_op(self):
+        import click
+        with pytest.raises(click.UsageError):
+            self._patch()({}, [{"op": "move", "path": "/a", "from": "/b"}])
