@@ -59,25 +59,46 @@ class TestLogsPagination:
         assert _logs_query_all(c, 0, 10, "", limit=2) == err
 
 
-class TestTracesPagination:
-    def test_follows_cursor(self):
-        p1 = {
-            "status": "success", "data": {"type": "raw", "data": {"results": [
-                {"queryName": "A", "rows": [{"data": {"spanID": "s1"}}],
-                 "nextCursor": "CUR"}]}}}
-        p2 = {
-            "status": "success", "data": {"type": "raw", "data": {"results": [
-                {"queryName": "A", "rows": [{"data": {"spanID": "s2"}}]}]}}}
-        c = FakeClient([p1, p2])
-        rows = _traces_query_all(c, 0, 10, "", limit=1)
-        assert [r["spanID"] for r in rows] == ["s1", "s2"]
-        assert c.calls == 2
+class OffsetAwareClient:
+    """Fake that pages a fixed row set by the offset in the request payload.
 
-    def test_stops_without_cursor(self):
-        c = FakeClient([_raw_page([{"spanID": "s1"}])])
+    Unlike ``FakeClient`` (which ignores the payload and returns queued pages),
+    this honours the offset actually sent, so a helper that fails to advance the
+    offset would be caught.
+    """
+
+    def __init__(self, total_rows, key="spanID"):
+        self.rows = [{key: f"s{i}"} for i in range(total_rows)]
+        self.calls = 0
+
+    def query_builder_v5(self, payload):
+        self.calls += 1
+        spec = payload["compositeQuery"]["queries"][0]["spec"]
+        offset = spec.get("offset", 0)
+        limit = spec.get("limit", len(self.rows))
+        page = self.rows[offset : offset + limit]
+        return {"status": "success", "data": {"type": "raw", "data": {"results": [
+            {"queryName": "A", "rows": [{"data": r} for r in page]}]}}}
+
+
+class TestTracesPagination:
+    def test_walks_offsets_across_pages(self):
+        c = OffsetAwareClient(total_rows=5)
+        rows = _traces_query_all(c, 0, 10, "", limit=2)
+        # No duplicates and every span is fetched exactly once.
+        assert [r["spanID"] for r in rows] == ["s0", "s1", "s2", "s3", "s4"]
+        assert c.calls == 3
+
+    def test_stops_on_short_first_page(self):
+        c = OffsetAwareClient(total_rows=1)
         rows = _traces_query_all(c, 0, 10, "", limit=5)
         assert len(rows) == 1
         assert c.calls == 1
+
+    def test_error_passthrough(self):
+        err = {"error": True}
+        c = FakeClient([err])
+        assert _traces_query_all(c, 0, 10, "", limit=2) == err
 
 
 BASE = "http://signoz.test"

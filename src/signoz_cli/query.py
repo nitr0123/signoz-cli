@@ -67,6 +67,7 @@ def build_traces_query_payload(
     end: int,
     filter_expression: str,
     limit: int = 1000,
+    offset: int = 0,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": "v1",
@@ -83,7 +84,7 @@ def build_traces_query_payload(
                         "disabled": False,
                         "filter": {"expression": filter_expression},
                         "limit": limit,
-                        "offset": 0,
+                        "offset": offset,
                         "order": [{"key": {"name": "timestamp"}, "direction": "desc"}],
                         "having": {"expression": ""},
                         "selectFields": [
