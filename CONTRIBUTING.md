@@ -51,3 +51,20 @@ A PR is only mergeable when all three jobs pass.
 Unit tests live in `tests/` and must not require a running SigNoz instance:
 HTTP interactions are covered with `httpx.MockTransport`, and CLI flows with
 `click.testing.CliRunner`. Keep it that way so CI stays hermetic.
+
+## Releasing
+
+1. Bump `version` in `pyproject.toml` and `__version__` in `src/signoz_cli/__init__.py`.
+2. Add a CHANGELOG entry.
+3. Merge to `main`, then create and push the tag **in its own push**:
+
+   ```shell
+   git tag -a vX.Y.Z -m "..." && git push forgejo vX.Y.Z
+   ```
+
+   Note: pushing a branch and a tag in the same `git push` (or re-pushing an
+   identical tag object) can swallow the Forgejo push event — tags must point
+   at fresh commits and be pushed alone.
+
+CI then builds the wheel/sdist, smoke-tests the install, and attaches the
+artifacts to the auto-created release (uses the repo secret `RELEASE_TOKEN`).

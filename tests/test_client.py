@@ -170,3 +170,24 @@ class TestExtractErrorMessage:
     def test_truncates_long_messages(self):
         resp = httpx.Response(500, text="x" * 10_000)
         assert len(_extract_error(resp)) <= 503
+
+
+class TestServiceAccountRoles:
+    def test_failed_role_assignment_reported(self):
+        def handler(request):
+            if "/roles" in request.url.path:
+                return httpx.Response(403, json={"error": {
+                    "code": "authz_forbidden", "message": "not allowed"}})
+            return httpx.Response(201, json={"data": {"id": "sa1"}})
+
+        c = make_client(handler)
+        _data, failed = c.create_service_account("new-sa", ["role-id-1"])
+        assert failed and "role-id-1" in failed[0]
+
+    def test_successful_role_assignment(self):
+        def handler(request):
+            return httpx.Response(200, json={"status": "success", "data": {}})
+
+        c = make_client(handler)
+        _data, failed = c.create_service_account("new-sa", ["role-id-1"])
+        assert failed == []

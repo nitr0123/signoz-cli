@@ -400,6 +400,9 @@ def profile() -> None:
               default="table", show_default=True, help="Output format.")
 @click.option("--json", is_flag=True, expose_value=False, is_eager=True,
               callback=_set_json_flag, help="Shorthand for -f json.")
+@click.option("--csv", "csv_flag", is_flag=True, expose_value=False, is_eager=True,
+              callback=lambda ctx, param, value: ctx.params.update({"fmt": "csv"}) if value else None,
+              help="Shorthand for -f csv.")
 def profile_list(fmt: str) -> None:
     """List configured profiles."""
     cfg = load_config()
@@ -868,8 +871,8 @@ def dashboards_list(
             items = []
             total = None
         if fetch_all:
-            # walk remaining pages
-            while True:
+            # walk remaining pages (bounded to avoid loops on bad servers)
+            for _ in range(_MAX_PAGES):
                 offset += limit
                 raw_page = client.list_dashboards_v2(limit=limit, offset=offset, query=query)
                 page_payload = raw_page.get("data", {}) if isinstance(raw_page, dict) else {}
@@ -2198,8 +2201,20 @@ def service_accounts_create(endpoint: str | None, token: str | None, fmt: str,
                     break
             if not role_ids:
                 raise click.UsageError(f"Unknown role '{role_name}'.")
-        data = client.create_service_account(name, role_ids)
+        data, failed_roles = client.create_service_account(name, role_ids)
+        if isinstance(data, dict) and fmt != "json":
+            data = data.get("data", data)
+            if isinstance(data, dict):
+                data["assignedRoles"] = [role_name] if role_name and not failed_roles else []
+                if failed_roles:
+                    data["failedRoleAssignments"] = failed_roles
         emit(data, fmt)
+        if failed_roles:
+            click.echo(
+                f"Warning: service account created but role assignment failed: "
+                f"{'; '.join(failed_roles)}. Assign manually via Settings.",
+                err=True,
+            )
     except Exception as e:
         _handle_error(e)
 
