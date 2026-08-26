@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import email.utils
 import time
 from typing import Any
 
@@ -10,6 +11,26 @@ import httpx
 from signoz_cli.query import build_promql_query_payload, build_sql_query_payload
 
 _RETRYABLE = {429, 500, 502, 503, 504}
+
+
+def _parse_retry_after(value: str) -> int | None:
+    """Parse a Retry-After header (delta-seconds or HTTP-date) into seconds.
+
+    Returns None when the header is absent or unparseable.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    try:
+        parsed = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    delta = parsed.timestamp() - time.time()
+    return max(0, int(delta))
 
 
 class SigNozApiError(Exception):
@@ -48,6 +69,12 @@ class SigNozClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def __enter__(self) -> SigNozClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------------
     # Auth
@@ -402,18 +429,26 @@ class SigNozClient:
         params: dict[str, str] | None = None,
         json_body: Any = None,
     ) -> httpx.Response:
-        """Send a request with retry/backoff on 429 and transient 5xx."""
+        """Send a request with retry/backoff on 429, transient 5xx, and network errors."""
         attempt = 0
         while True:
-            resp = self._client.request(
-                method, f"{self.endpoint}{path}", params=params, json=json_body
-            )
+            try:
+                resp = self._client.request(
+                    method, f"{self.endpoint}{path}", params=params, json=json_body
+                )
+            except httpx.TransportError:
+                # Connection reset / DNS / read timeout etc. -- treat as transient.
+                if attempt < self.max_retries:
+                    time.sleep(min(2**attempt, 30))
+                    attempt += 1
+                    continue
+                raise
             if resp.status_code in _RETRYABLE and attempt < self.max_retries:
                 delay = min(2**attempt, 30)
                 if resp.status_code == 429:
-                    retry_after = resp.headers.get("Retry-After", "")
-                    if retry_after.isdigit():
-                        delay = max(delay, min(int(retry_after), 60))
+                    retry_after = _parse_retry_after(resp.headers.get("Retry-After", ""))
+                    if retry_after is not None:
+                        delay = max(delay, min(retry_after, 60))
                 time.sleep(delay)
                 attempt += 1
                 continue

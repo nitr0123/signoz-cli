@@ -5,7 +5,12 @@ import json
 import httpx
 import pytest
 
-from signoz_cli.client import SigNozApiError, SigNozClient, _extract_error
+from signoz_cli.client import (
+    SigNozApiError,
+    SigNozClient,
+    _extract_error,
+    _parse_retry_after,
+)
 
 BASE = "http://signoz.test:8080"
 
@@ -173,6 +178,70 @@ class TestErrorHandling:
         def handler(request):
             return httpx.Response(200, text="<html>fallback</html>")
         assert make_client(handler).list_alerts() == {"raw": "<html>fallback</html>"}
+
+
+class TestNetworkRetry:
+    def test_retries_on_transport_error_then_succeeds(self, monkeypatch):
+        import signoz_cli.client as cl
+        monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+        attempts = {"n": 0}
+
+        def handler(request):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(200, json={"ok": True})
+
+        c = SigNozClient(BASE, "t", transport=httpx.MockTransport(handler), max_retries=3)
+        assert c.list_alerts() == {"ok": True}
+        assert attempts["n"] == 3
+
+    def test_gives_up_after_max_retries(self, monkeypatch):
+        import signoz_cli.client as cl
+        monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+
+        def handler(request):
+            raise httpx.ConnectError("nope", request=request)
+
+        c = SigNozClient(BASE, "t", transport=httpx.MockTransport(handler), max_retries=2)
+        with pytest.raises(httpx.ConnectError):
+            c.list_alerts()
+
+
+class TestContextManager:
+    def test_closes_on_exit(self):
+        closed = {"v": False}
+        c = SigNozClient(BASE, "t", transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={})))
+        orig = c.close
+
+        def _close():
+            closed["v"] = True
+            orig()
+
+        c.close = _close  # type: ignore[method-assign]
+        with c as ctx:
+            assert ctx is c
+        assert closed["v"] is True
+
+
+class TestRetryAfterParsing:
+    def test_integer_seconds(self):
+        assert _parse_retry_after("7") == 7
+
+    def test_blank_is_none(self):
+        assert _parse_retry_after("") is None
+        assert _parse_retry_after("   ") is None
+
+    def test_garbage_is_none(self):
+        assert _parse_retry_after("soon") is None
+
+    def test_http_date_is_seconds_from_now(self):
+        import email.utils
+        import time as _t
+        future = email.utils.formatdate(_t.time() + 30, usegmt=True)
+        secs = _parse_retry_after(future)
+        assert secs is not None and 20 <= secs <= 40
 
 
 class TestExtractErrorMessage:

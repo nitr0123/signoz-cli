@@ -39,6 +39,12 @@ markers = [
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+# Ruff defaults (E4/E7/E9, F) plus import-sorting (I), bugbear (B),
+# pyupgrade (UP) and blind-except (BLE) so the per-file BLE001 ignore below
+# is actually active. (Bare "E" would also pull in E501 line-length noise.)
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "BLE"]
+
 [tool.ruff.lint.per-file-ignores]
 # CLI commands intentionally funnel all errors through _handle_error
 "src/signoz_cli/main.py" = ["BLE001"]

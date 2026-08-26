@@ -180,6 +180,9 @@ class TestAuthVerifyProfile:
                 captured["endpoint"] = endpoint
                 captured["token"] = token
 
+            def close(self):
+                pass
+
             def verify(self):
                 return {"name": "svc"}
 

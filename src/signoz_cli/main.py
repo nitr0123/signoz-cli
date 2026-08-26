@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import sys
+from collections import OrderedDict
 from typing import Any
 
 import click
@@ -303,7 +305,13 @@ def _get_client(
     if prof.get("insecure"):
         insecure = True
 
-    return SigNozClient(resolved_endpoint, resolved_token, timeout=timeout, verify=not insecure)
+    client = SigNozClient(
+        resolved_endpoint, resolved_token, timeout=timeout, verify=not insecure
+    )
+    # Close the connection pool on interpreter exit (commands are short-lived and
+    # do not otherwise close the client).
+    atexit.register(client.close)
+    return client
 
 
 def _handle_error(e: Exception) -> None:
@@ -311,6 +319,12 @@ def _handle_error(e: Exception) -> None:
         click.echo(f"Error: {e.message} (HTTP {e.status_code})", err=True)
     elif isinstance(e, httpx.ConnectError):
         click.echo(f"Error: cannot connect to endpoint ({e})", err=True)
+    elif isinstance(e, httpx.TimeoutException):
+        click.echo(
+            "Error: request timed out. Increase --timeout (or SIGNOZ_TIMEOUT) "
+            "or narrow the query time range.",
+            err=True,
+        )
     else:
         click.echo(f"Error: {e}", err=True)
     sys.exit(1)
@@ -1169,7 +1183,7 @@ def logs_errors(
         client = _get_client(endpoint, token, profile)
         parts = ["severity_text IN ['ERROR', 'FATAL']"]
         if service:
-            parts.append(f"service.name = '{service}'")
+            parts.append(f"service.name = '{_q(service)}'")
         filter_expr = " AND ".join(parts)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         payload = build_logs_query_payload(s, e, filter_expr, limit=limit)
@@ -1455,7 +1469,7 @@ def traces_get(
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
-        filter_expr = f"traceID = '{trace_id}'"
+        filter_expr = f"traceID = '{_q(trace_id)}'"
         payload = build_traces_query_payload(s, e, filter_expr, limit=1000)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt, table_keys=_TRACE_TABLE_KEYS)
@@ -1486,7 +1500,7 @@ def traces_errors(
         client = _get_client(endpoint, token, profile)
         parts = ["hasError = true"]
         if service:
-            parts.append(f"service.name in ['{service}']")
+            parts.append(f"service.name in ['{_q(service)}']")
         filter_expr = " AND ".join(parts)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h")
         payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
@@ -1882,7 +1896,11 @@ def logs_tail(
         return
 
     filter_expr = _build_log_filter(None, service, severity, search_text)
-    seen: set[str] = set()
+    # Ordered set of already-printed rows. Keyed on the server id when present,
+    # otherwise a composite of timestamp+service+body -- the log select fields
+    # do not include an id, so keying on "id" alone never dedupes and every
+    # overlapping poll would reprint the same lines.
+    seen: OrderedDict[str, None] = OrderedDict()
     click.echo("Tailing logs... Ctrl-C to stop.", err=True)
     try:
         while True:
@@ -1899,18 +1917,22 @@ def logs_tail(
                 continue
             if isinstance(rows, list):
                 for row in reversed(rows):  # oldest first
-                    row_id = str(row.get("id", ""))
-                    if row_id and row_id in seen:
+                    key = str(
+                        row.get("id")
+                        or f"{row.get('timestamp', '')}|"
+                        f"{row.get('service.name', '')}|{row.get('body', '')}"
+                    )
+                    if key in seen:
                         continue
-                    seen.add(row_id)
+                    seen[key] = None
                     click.echo(
                         f"{row.get('timestamp', '')} "
                         f"{row.get('severity_text', '')!s:5s} "
                         f"{row.get('service.name', '')}: {row.get('body', '')}"
                     )
-            # bound memory
-            if len(seen) > 50000:
-                seen = set(list(seen)[-10000:])
+            # bound memory: evict oldest keys first (insertion order preserved)
+            while len(seen) > 50000:
+                seen.popitem(last=False)
             _time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("Stopped.", err=True)
@@ -2381,7 +2403,7 @@ def _unwrap_v5(data: Any, agg_label: str | None = None) -> Any:
             ] if agg_label else cols
             for vals in r.get("data", []):
                 if isinstance(vals, list) and len(vals) == len(named):
-                    rows.append(dict(zip(named, vals)))
+                    rows.append(dict(zip(named, vals, strict=True)))
                 else:
                     rows.append(vals)
     return rows
@@ -2476,6 +2498,19 @@ def _dashboard_summary(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _q(value: str) -> str:
+    r"""Escape a value for use inside a single-quoted filter literal.
+
+    SigNoz filter-expression string literals compile down to ClickHouse
+    single-quoted strings, which escape ``\`` and ``'`` with a backslash.
+    Without this, a value containing an apostrophe (e.g. ``it's-broken``)
+    produces a malformed query, and in principle allows filter injection.
+    ``--query``/``--filter`` are passed through verbatim: those are whole
+    expressions the user is writing on purpose, not values.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def _build_log_filter(
     query: str | None,
     service: str | None,
@@ -2486,11 +2521,11 @@ def _build_log_filter(
     if query:
         parts.append(query)
     if service:
-        parts.append(f"service.name = '{service}'")
+        parts.append(f"service.name = '{_q(service)}'")
     if severity:
-        parts.append(f"severity_text = '{severity}'")
+        parts.append(f"severity_text = '{_q(severity)}'")
     if search_text:
-        parts.append(f"body CONTAINS '{search_text}'")
+        parts.append(f"body CONTAINS '{_q(search_text)}'")
     return " AND ".join(parts)
 
 
@@ -2504,9 +2539,9 @@ def _build_trace_filter(
     if query:
         parts.append(query)
     if service:
-        parts.append(f"service.name = '{service}'")
+        parts.append(f"service.name = '{_q(service)}'")
     if operation:
-        parts.append(f"name = '{operation}'")
+        parts.append(f"name = '{_q(operation)}'")
     if error_filter == "true":
         parts.append("hasError = true")
     elif error_filter == "false":

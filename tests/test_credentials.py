@@ -1,5 +1,7 @@
 """Tests for credential resolution precedence (flags > env > profile > legacy)."""
 
+import json
+
 import pytest
 
 from signoz_cli.main import _resolve_credentials
@@ -27,9 +29,6 @@ def multi_config(tmp_path, monkeypatch):
         "token": "tok-legacy",
     }))
     return cfg_dir
-
-
-import json
 
 
 class TestResolveCredentials:

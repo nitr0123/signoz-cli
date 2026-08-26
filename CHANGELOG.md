@@ -18,8 +18,28 @@
 - `logs tail --severity` help text corrected (exact match, not "minimum")
 - `signoz promql --step` is now applied. The client's inline PromQL payload
   accepted the step interval but never sent it; it now uses the shared builder
+- `logs tail` no longer reprints the same lines on every poll. Dedup keyed on an
+  `id` field that the log query never selects, so nothing was ever deduplicated;
+  it now keys on the server id when present and otherwise on
+  timestamp+service+body, with insertion-ordered eviction
+- Filter values are escaped before interpolation. Service names, severities,
+  search text, operations and trace ids containing `'` or `\` (e.g.
+  `--search-text "it's broken"`) no longer produce malformed queries
 
 ### Changed
+
+- Requests now retry on transient network errors (connection reset, DNS,
+  read timeout), not just on HTTP 429/5xx; `Retry-After` HTTP-date values are
+  honoured in addition to delta-seconds
+- Request timeouts now report a clear, actionable message instead of a raw
+  `httpx` exception
+- The HTTP client's connection pool is closed on exit (context-manager support
+  plus an atexit hook)
+- Stricter linting: an explicit ruff rule set (import-sorting, bugbear,
+  pyupgrade, blind-except) replaces the previously inert `BLE001` ignore
+- The package now ships a `py.typed` marker so downstream consumers get types
+- End-to-end CLI tests added for the query commands (logs/traces/metrics,
+  JSON/table/CSV, `-o`, error paths, `logs tail` dedup)
 
 - PromQL/SQL request payloads are built by the shared `query.py` builders
   instead of duplicated inline in the client, removing a second source of truth

@@ -22,6 +22,19 @@ class TestLogFilter:
     def test_service_only(self):
         assert _build_log_filter(None, "api", None, None) == "service.name = 'api'"
 
+    def test_apostrophe_in_value_is_escaped(self):
+        # A value with a quote must not break out of the string literal.
+        f = _build_log_filter(None, "it's-svc", None, None)
+        assert f == r"service.name = 'it\'s-svc'"
+
+    def test_backslash_in_value_is_escaped(self):
+        f = _build_log_filter(None, None, None, r"a\b")
+        assert f == r"body CONTAINS 'a\\b'"
+
+    def test_query_passthrough_not_escaped(self):
+        # --query is a whole expression the user wrote; leave it verbatim.
+        assert _build_log_filter("service.name = 'x'", None, None, None) == "service.name = 'x'"
+
 
 class TestTraceFilter:
     def test_error_true(self):
@@ -34,6 +47,10 @@ class TestTraceFilter:
 
     def test_query_passthrough(self):
         assert _build_trace_filter("durationNano > 5", None, None, None) == "durationNano > 5"
+
+    def test_operation_apostrophe_escaped(self):
+        f = _build_trace_filter(None, None, "GET /o'brien", None)
+        assert f == r"name = 'GET /o\'brien'"
 
 
 class TestOrderBy:
