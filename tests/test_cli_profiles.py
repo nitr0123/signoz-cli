@@ -2,6 +2,7 @@
 
 import json
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -178,3 +179,70 @@ class TestJsonFlag:
         runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])
         result = runner.invoke(cli, ["profile", "show", "a"])
         assert json.loads(result.output)["endpoint"] == "http://a:1"
+
+
+class TestCsvShorthand:
+    def test_csv_flag_outputs_csv(self, runner):
+        runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])
+        result = runner.invoke(cli, ["profile", "list", "--csv"])
+        assert result.exit_code == 0, result.output
+        assert any("http://a:1" in ln for ln in result.output.splitlines())
+
+
+class TestTimeoutInsecure:
+    @staticmethod
+    def _capture_client(monkeypatch, env, holder_name, holder_value):
+
+        import signoz_cli.main as m
+
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        holder = getattr(m, holder_name)
+        old = holder["value"]
+        captured = {}
+        real = m.SigNozClient
+
+        def recorder(endpoint, token, **kwargs):
+            captured.update(kwargs)
+            return real(endpoint, token,
+                        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+
+        try:
+            holder["value"] = holder_value
+            m.SigNozClient = recorder
+            m._get_client(None, None)
+            return captured
+        finally:
+            holder["value"] = old
+            m.SigNozClient = real
+
+    def test_env_timeout_used(self, runner, monkeypatch):
+        captured = self._capture_client(
+            monkeypatch,
+            {"SIGNOZ_ENDPOINT": "http://x:8080", "SIGNOZ_ACCESS_TOKEN": "tok",
+             "SIGNOZ_TIMEOUT": "5"},
+            "_TIMEOUT_HOLDER", None)
+        assert captured.get("timeout") == 5.0
+
+    def test_flag_timeout_wins_over_env(self, runner, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_TIMEOUT", "5")
+        captured = self._capture_client(
+            monkeypatch,
+            {"SIGNOZ_ENDPOINT": "http://x:8080", "SIGNOZ_ACCESS_TOKEN": "tok"},
+            "_TIMEOUT_HOLDER", 42.0)
+        assert captured.get("timeout") == 42.0
+
+    def test_insecure_env_disables_verify(self, runner, monkeypatch):
+        captured = self._capture_client(
+            monkeypatch,
+            {"SIGNOZ_ENDPOINT": "http://x:8080", "SIGNOZ_ACCESS_TOKEN": "tok",
+             "SIGNOZ_INSECURE": "1"},
+            "_INSECURE_HOLDER", False)
+        assert captured.get("verify") is False
+
+    def test_verify_default_true(self, runner, monkeypatch):
+        captured = self._capture_client(
+            monkeypatch,
+            {"SIGNOZ_ENDPOINT": "http://x:8080", "SIGNOZ_ACCESS_TOKEN": "tok"},
+            "_INSECURE_HOLDER", False)
+        assert captured.get("verify") is True

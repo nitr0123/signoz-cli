@@ -384,8 +384,16 @@ class SigNozClient:
     def list_service_accounts(self) -> Any:
         return self._get("/api/v1/service_accounts")
 
-    def create_service_account(self, name: str, role_ids: list[str] | None = None) -> Any:
+    def create_service_account(
+        self, name: str, role_ids: list[str] | None = None
+    ) -> tuple[Any, list[str]]:
+        """Create a service account and optionally assign roles.
+
+        Returns (response, failed_role_ids) so callers can warn when a role
+        could not be assigned instead of failing silently.
+        """
         data = self._post("/api/v1/service_accounts", json_body={"name": name})
+        failed_roles: list[str] = []
         if role_ids and isinstance(data, dict):
             new_id = (data.get("data") or {}).get("id")
             if new_id:
@@ -395,9 +403,9 @@ class SigNozClient:
                             f"/api/v1/service_accounts/{new_id}/roles",
                             json_body={"id": rid},
                         )
-                    except SigNozApiError:
-                        pass
-        return data
+                    except SigNozApiError as exc:
+                        failed_roles.append(f"{rid}: {exc.message}")
+        return data, failed_roles
 
     def delete_service_account(self, account_id: str) -> Any:
         resp = self._request("DELETE", f"/api/v1/service_accounts/{account_id}")
