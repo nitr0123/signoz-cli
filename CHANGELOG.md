@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.0 (2026-08-26)
+
+### Fixed
+
+- `logs tail` no longer reprints overlapping rows on every poll (dedup key
+  never existed in the query output); eviction now keeps insertion order
+- Filter values containing apostrophes no longer produce HTTP 400 -
+  escaped with SQL-style quote doubling, live-verified against v0.138
+- Network errors (connection reset, DNS, read timeout) are retried like
+  transient HTTP failures instead of failing immediately
+
+### Changed
+
+- Stricter ruff rule set (import sorting, bugbear, pyupgrade, blind-except)
+- Package ships a `py.typed` marker
+- Timeouts report an actionable message suggesting --timeout / narrower range
+- Client connection pool closed on process exit
+
+### Added
+
+- Command-level e2e tests for logs/traces/metrics queries (JSON/table/CSV,
+  -o, error paths), live integration suite remains opt-in via pytest marker
+
 ## Unreleased
 
 ### Fixed
