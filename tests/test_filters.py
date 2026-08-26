@@ -22,14 +22,17 @@ class TestLogFilter:
     def test_service_only(self):
         assert _build_log_filter(None, "api", None, None) == "service.name = 'api'"
 
-    def test_apostrophe_in_value_is_escaped(self):
-        # A value with a quote must not break out of the string literal.
+    def test_apostrophe_in_value_is_doubled(self):
+        # Live-verified on v0.138: backslash-escaped quotes are a syntax error
+        # in the filter grammar; SQL-style doubling is accepted.
         f = _build_log_filter(None, "it's-svc", None, None)
-        assert f == r"service.name = 'it\'s-svc'"
+        assert f == "service.name = 'it''s-svc'"
 
-    def test_backslash_in_value_is_escaped(self):
+    def test_backslash_value_passes_through(self):
+        # Server-side DSL handles backslash values inconsistently (documented);
+        # we deliberately do not touch them.
         f = _build_log_filter(None, None, None, r"a\b")
-        assert f == r"body CONTAINS 'a\\b'"
+        assert f == r"body CONTAINS 'a\b'"
 
     def test_query_passthrough_not_escaped(self):
         # --query is a whole expression the user wrote; leave it verbatim.
@@ -48,9 +51,9 @@ class TestTraceFilter:
     def test_query_passthrough(self):
         assert _build_trace_filter("durationNano > 5", None, None, None) == "durationNano > 5"
 
-    def test_operation_apostrophe_escaped(self):
+    def test_operation_apostrophe_doubled(self):
         f = _build_trace_filter(None, None, "GET /o'brien", None)
-        assert f == r"name = 'GET /o\'brien'"
+        assert f == "name = 'GET /o''brien'"
 
 
 class TestOrderBy:

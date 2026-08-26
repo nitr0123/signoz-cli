@@ -2501,14 +2501,20 @@ def _dashboard_summary(d: dict[str, Any]) -> dict[str, Any]:
 def _q(value: str) -> str:
     r"""Escape a value for use inside a single-quoted filter literal.
 
-    SigNoz filter-expression string literals compile down to ClickHouse
-    single-quoted strings, which escape ``\`` and ``'`` with a backslash.
-    Without this, a value containing an apostrophe (e.g. ``it's-broken``)
-    produces a malformed query, and in principle allows filter injection.
+    Live-verified against SigNoz v0.138: the filter grammar rejects
+    backslash-escaped quotes (``it\'s`` -> HTTP 400 syntax error) but accepts
+    SQL-style doubled quotes (``it''s``). Only quotes are therefore escaped.
+
+    Known limitation (server-side): filter *values* containing backslashes
+    match inconsistently through the query DSL depending on surrounding text.
+    Use ``--query`` with a hand-written expression for such values.
+
+    Without escaping, a value containing an apostrophe (e.g. ``it's-broken``)
+    produces a 400 from the server, and in principle allows filter injection.
     ``--query``/``--filter`` are passed through verbatim: those are whole
     expressions the user is writing on purpose, not values.
     """
-    return value.replace("\\", "\\\\").replace("'", "\\'")
+    return value.replace("'", "''")
 
 
 def _build_log_filter(
