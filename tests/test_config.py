@@ -34,11 +34,19 @@ class TestConfigRoundtrip:
         _isolate(tmp_path, monkeypatch)
         assert load_config() == {}
 
-    def test_load_invalid_json(self, tmp_path, monkeypatch):
+    def test_load_invalid_json(self, tmp_path, monkeypatch, capsys):
         d = _isolate(tmp_path, monkeypatch)
         d.mkdir(parents=True)
         (d / "config.json").write_text("{not json")
         assert load_config() == {}
+        # A corrupt-but-present config should warn rather than fail silently.
+        err = capsys.readouterr().err
+        assert "could not read config" in err
+
+    def test_load_missing_file_is_silent(self, tmp_path, monkeypatch, capsys):
+        _isolate(tmp_path, monkeypatch)
+        assert load_config() == {}
+        assert capsys.readouterr().err == ""
 
     def test_save_creates_dir(self, tmp_path, monkeypatch):
         _isolate(tmp_path, monkeypatch)

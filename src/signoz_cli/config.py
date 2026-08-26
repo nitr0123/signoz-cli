@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,10 @@ def load_config() -> dict[str, Any]:
         return {}
     try:
         return json.loads(CONFIG_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        # A present-but-unreadable config silently resolving to "no config"
+        # produces a confusing "Missing endpoint" downstream; surface why.
+        print(f"Warning: could not read config {CONFIG_FILE}: {exc}", file=sys.stderr)
         return {}
 
 

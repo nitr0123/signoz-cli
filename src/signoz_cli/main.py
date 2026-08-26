@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -85,7 +86,7 @@ def _set_insecure(ctx: click.Context, param: click.Parameter, value: bool) -> No
 
 def _parse_version(version: str) -> tuple[int, ...]:
     """Parse 'v0.136.1' into (0, 136, 1); unknown formats yield ()."""
-    m = __import__("re").fullmatch(r"v?(\d+(?:\.\d+){0,3})", (version or "").strip())
+    m = re.fullmatch(r"v?(\d+(?:\.\d+){0,3})", (version or "").strip())
     return tuple(int(p) for p in m.group(1).split(".")) if m else ()
 
 
@@ -2186,9 +2187,7 @@ def service_accounts_create(endpoint: str | None, token: str | None, fmt: str,
                             role_name: str | None) -> None:
     """Create a service account, optionally assigning a managed role."""
     try:
-        import re as _re
-
-        if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{0,49}", name):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,49}", name):
             raise click.UsageError(
                 "Name must be lowercase letters/numbers/hyphens, max 50 chars."
             )
@@ -2265,6 +2264,15 @@ def service_accounts_roles(endpoint: str | None, token: str | None, fmt: str,
 _MAX_PAGES = 200
 
 
+def _warn_page_cap(kind: str, rows: int) -> None:
+    """Tell the user results were truncated at the page cap (not silently)."""
+    click.echo(
+        f"Warning: stopped after {_MAX_PAGES} pages ({rows} {kind}); more may "
+        "exist. Narrow --time-range or add filters to fetch the rest.",
+        err=True,
+    )
+
+
 def _logs_query_all(
     client: SigNozClient,
     s: int,
@@ -2286,6 +2294,8 @@ def _logs_query_all(
         if len(page) < limit:
             break
         offset += limit
+    else:
+        _warn_page_cap("logs", len(rows))
     return rows
 
 
@@ -2313,6 +2323,8 @@ def _traces_query_all(
         if len(page) < limit:
             break
         offset += limit
+    else:
+        _warn_page_cap("spans", len(rows))
     return rows
 
 
