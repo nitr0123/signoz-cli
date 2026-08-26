@@ -162,6 +162,47 @@ class TestWhoami:
         assert "http://flag:1" in result.output
 
 
+class TestAuthVerifyProfile:
+    def test_verify_uses_selected_leaf_profile(self, runner, monkeypatch):
+        # Two profiles with distinct endpoints; `auth verify -p b` must connect
+        # to b's endpoint. Before the fix, the leaf --profile was dropped and
+        # the default (a) endpoint was used instead.
+        runner.invoke(cli, ["configure", "-p", "a",
+                            "--endpoint", "http://a-endpoint:1", "--token", "tok-a-123456"])
+        runner.invoke(cli, ["configure", "-p", "b",
+                            "--endpoint", "http://b-endpoint:2", "--token", "tok-b-123456"])
+
+        import signoz_cli.main as m
+        captured = {}
+
+        class Recorder:
+            def __init__(self, endpoint, token, **kwargs):
+                captured["endpoint"] = endpoint
+                captured["token"] = token
+
+            def verify(self):
+                return {"name": "svc"}
+
+            def get_server_version(self):
+                return {"version": "v0.138.0"}
+
+        monkeypatch.setattr(m, "SigNozClient", Recorder)
+        result = runner.invoke(cli, ["auth", "verify", "-p", "b"])
+        assert result.exit_code == 0, result.output
+        assert captured["endpoint"] == "http://b-endpoint:2"
+        assert captured["token"] == "tok-b-123456"
+
+
+class TestMaskToken:
+    def test_short_token_not_reported_as_unset(self):
+        from signoz_cli.main import _mask_token
+        assert _mask_token(None) == "<not set>"
+        assert _mask_token("") == "<not set>"
+        # A real but short token must not read as "<not set>".
+        assert _mask_token("shorttok") == "***"
+        assert _mask_token("abcdefghijklmnop") == "abcdefgh...mnop"
+
+
 class TestJsonFlag:
     def test_json_shorthand_outputs_parseable_json(self, runner):
         runner.invoke(cli, ["configure", "-p", "a", "--endpoint", "http://a:1", "--token", "tok"])

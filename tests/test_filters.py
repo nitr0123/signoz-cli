@@ -117,3 +117,13 @@ class TestApplyJsonPatch:
         import click
         with pytest.raises(click.UsageError):
             self._patch()({}, [{"op": "move", "path": "/a", "from": "/b"}])
+
+    def test_replace_through_list_index(self):
+        # Traversing *into* a list element by a numeric index must work; the
+        # intermediate segment used to be indexed with a string and raised
+        # "list indices must be integers".
+        f = self._patch()
+        obj = {"widgets": [{"title": "old"}, {"title": "keep"}]}
+        out = f(obj, [{"op": "replace", "path": "/widgets/0/title", "value": "new"}])
+        assert out["widgets"][0]["title"] == "new"
+        assert out["widgets"][1]["title"] == "keep"

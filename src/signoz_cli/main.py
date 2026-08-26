@@ -113,7 +113,7 @@ def _apply_json_patch(obj: Any, ops: list[dict[str, Any]]) -> Any:
             raise click.UsageError(f"Unsupported patch on root: {op}")
         parent = result
         for p in parts[:-1]:
-            parent = parent[p] if isinstance(parent, list) else parent.setdefault(p, {})
+            parent = parent[int(p)] if isinstance(parent, list) else parent.setdefault(p, {})
         last = parts[-1]
         if action in ("add", "replace"):
             if last == "-" and isinstance(parent, list):
@@ -137,9 +137,12 @@ def _apply_json_patch(obj: Any, ops: list[dict[str, Any]]) -> Any:
 
 
 def _mask_token(token: str | None) -> str:
-    if token and len(token) > 12:
+    if not token:
+        return "<not set>"
+    if len(token) > 12:
         return f"{token[:8]}...{token[-4:]}"
-    return "<not set>"
+    # Short token: still set, but too short to show a prefix/suffix safely.
+    return "***"
 
 
 def _resolve_credentials(
@@ -504,7 +507,7 @@ def auth_verify(endpoint: str | None, token: str | None, fmt: str,
     profile: str | None,) -> None:
     """Verify the API key against the live instance and report version compatibility."""
     try:
-        client = _get_client(endpoint, token)
+        client = _get_client(endpoint, token, profile)
         data = client.verify()
         try:
             server_version = (client.get_server_version() or {}).get("version", "")
@@ -1851,7 +1854,7 @@ def traces_detail(
 @logs.command("tail")
 @_common_options
 @click.option("--service", default=None, help="Service name filter.")
-@click.option("--severity", default=None, help="Minimum severity filter.")
+@click.option("--severity", default=None, help="Severity filter (exact match, e.g. ERROR).")
 @click.option("--search-text", default=None, help="Body text filter (CONTAINS).")
 @click.option("--interval", type=float, default=3.0, show_default=True,
               help="Poll interval in seconds.")
@@ -2293,25 +2296,23 @@ def _traces_query_all(
     filter_expr: str,
     limit: int,
 ) -> list[Any]:
-    """Fetch all span rows by following the raw-result nextCursor."""
+    """Fetch all span rows by walking the offset until a short page is returned.
+
+    Offset pagination mirrors :func:`_logs_query_all`; the previous cursor-based
+    walk never fed the cursor back into the request, so it re-fetched the first
+    page and could not advance.
+    """
     rows: list[Any] = []
-    cursor: str | None = None
+    offset = 0
     for _ in range(_MAX_PAGES):
-        payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
-        resp = client.query_builder_v5(payload)
-        nxt = None
-        try:
-            results = resp["data"]["data"]["results"]
-            nxt = (results[0] or {}).get("nextCursor") or None
-        except (KeyError, TypeError, IndexError):
-            pass
-        page = _unwrap_v5(resp)
+        payload = build_traces_query_payload(s, e, filter_expr, limit=limit, offset=offset)
+        page = _unwrap_v5(client.query_builder_v5(payload))
         if not isinstance(page, list):
-            return page
+            return page  # error passthrough
         rows.extend(page)
-        if not nxt or nxt == cursor:
+        if len(page) < limit:
             break
-        cursor = nxt
+        offset += limit
     return rows
 
 

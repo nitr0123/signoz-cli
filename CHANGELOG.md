@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `auth verify` now honours the `--profile` flag (it was silently dropped, so
+  `signoz auth verify -p prod` verified the default profile instead)
+- `traces search --all` now paginates correctly. The previous cursor walk never
+  sent the cursor back to the server, so it re-fetched the first page and
+  returned duplicated rows without advancing; it now walks the offset like
+  `logs search --all`
+- `dashboards patch` / `alerts patch`: JSON-Patch paths that traverse *into* a
+  list element by index (e.g. `/widgets/0/title`) no longer crash with
+  "list indices must be integers"
+- Masked-token display: a real but short (<=12 char) token no longer renders as
+  `<not set>` in `auth whoami` / `profile list` / `profile show`
+- `logs tail --severity` help text corrected (exact match, not "minimum")
+
 ## v0.3.0 (2026-08-26)
 
 ### Added
