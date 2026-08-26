@@ -43,12 +43,7 @@ jobs:
 
           if [ -z "$RID" ]; then
             echo "Release for $TAG does not exist; creating."
-            BODY=$(python3 - "$TAG" <<'PY'
-            import json, sys
-            print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1],
-                              "body": f"Release {sys.argv[1]} (created by CI)"}))
-            PY
-            )
+            BODY=$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1], "body": "Release " + sys.argv[1]}))' "$TAG")
             RID=$(curl -s -X POST "$HOST/api/v1/repos/$REPO/releases" \
               -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
               -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
