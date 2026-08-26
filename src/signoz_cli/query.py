@@ -269,6 +269,8 @@ def build_promql_query_payload(
     query: str,
     step_interval: int = 60,
 ) -> dict[str, Any]:
+    """PromQL passthrough. The spec field is ``step`` (seconds or Go duration);
+    ``stepInterval`` is rejected by the server for PromQL queries."""
     return {
         "schemaVersion": "v1",
         "start": start,
@@ -278,7 +280,7 @@ def build_promql_query_payload(
             "queries": [
                 {
                     "type": "promql",
-                    "spec": {"name": "A", "query": query, "stepInterval": step_interval},
+                    "spec": {"name": "A", "query": query, "step": step_interval},
                 }
             ],
         },

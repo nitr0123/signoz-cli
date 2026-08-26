@@ -135,6 +135,28 @@ class TestEndpointRouting:
         assert body["tags"] == [{"key": "k", "value": "v"}]
 
 
+class TestPromqlSqlRequests:
+    def test_promql_forwards_step_interval(self):
+        h = RecordingHandler()
+        make_client(h).query_promql("up", start=1, end=2, step=45)
+        r = h.requests[0]
+        assert (r.method, r.url.path) == ("POST", "/api/v5/query_range")
+        spec = json.loads(r.content)["compositeQuery"]["queries"][0]["spec"]
+        # Regression: the old inline payload accepted `step` but never sent it.
+        # The wire field is `step` (0.138 rejects `stepInterval` on promql specs).
+        assert spec["step"] == 45
+        assert spec["query"] == "up"
+
+    def test_sql_request_shape(self):
+        h = RecordingHandler()
+        make_client(h).query_sql("SELECT 1", start=1, end=2)
+        body = json.loads(h.requests[0].content)
+        assert body["requestType"] == "raw"
+        q = body["compositeQuery"]["queries"][0]
+        assert q["type"] == "clickhouse_sql"
+        assert q["spec"]["query"] == "SELECT 1"
+
+
 class TestErrorHandling:
     def test_error_raises_signoz_api_error(self):
         body = {"status": "error",

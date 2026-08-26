@@ -16,6 +16,19 @@
 - Masked-token display: a real but short (<=12 char) token no longer renders as
   `<not set>` in `auth whoami` / `profile list` / `profile show`
 - `logs tail --severity` help text corrected (exact match, not "minimum")
+- `signoz promql --step` is now applied. The client's inline PromQL payload
+  accepted the step interval but never sent it; it now uses the shared builder
+
+### Changed
+
+- PromQL/SQL request payloads are built by the shared `query.py` builders
+  instead of duplicated inline in the client, removing a second source of truth
+- `resolve_timestamps` now honours a lone `--start` (window runs to now) or
+  lone `--end` (runs back one range) instead of silently ignoring it
+- A present-but-unreadable `~/.signoz/config.json` now prints a warning to
+  stderr instead of silently resolving to "no config"
+- `logs search --all` / `traces search --all` warn on stderr when results are
+  truncated at the internal page cap, instead of stopping silently
 
 ## v0.3.0 (2026-08-26)
 

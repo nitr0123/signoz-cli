@@ -19,20 +19,32 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 CONFIG_DIR = Path(os.getenv("SIGNOZ_CONFIG_DIR", str(Path.home() / ".signoz")))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+_CONFIG_WARNED = False
+
 
 def load_config() -> dict[str, Any]:
-    """Load config from ~/.signoz/config.json, or return empty dict."""
+    """Load config from ~/.signoz/config.json, or return empty dict.
+
+    A present-but-unreadable config warns once per process (it would otherwise
+    resurface downstream as a confusing "Missing endpoint"), while a missing
+    file stays silent — that is the normal first-run case.
+    """
+    global _CONFIG_WARNED
     if not CONFIG_FILE.exists():
         return {}
     try:
         return json.loads(CONFIG_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        if not _CONFIG_WARNED:
+            print(f"Warning: could not read config {CONFIG_FILE}: {exc}", file=sys.stderr)
+            _CONFIG_WARNED = True
         return {}
 
 

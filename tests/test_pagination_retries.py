@@ -53,6 +53,17 @@ class TestLogsPagination:
         rows = _logs_query_all(c, 0, 10, "", limit=2)
         assert len(rows) == 400  # _MAX_PAGES=200 x limit=2
 
+    def test_cap_warns_about_truncation(self, capsys):
+        c = FakeClient([_raw_page([{"id": 0}, {"id": 1}])] * 500)
+        _logs_query_all(c, 0, 10, "", limit=2)
+        err = capsys.readouterr().err
+        assert "stopped after" in err and "more may exist" in err
+
+    def test_short_page_does_not_warn(self, capsys):
+        c = FakeClient([_raw_page([{"id": 0}])])
+        _logs_query_all(c, 0, 10, "", limit=2)
+        assert capsys.readouterr().err == ""
+
     def test_error_passthrough(self):
         err = {"error": True}
         c = FakeClient([err])

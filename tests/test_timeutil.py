@@ -46,3 +46,20 @@ class TestResolveTimestamps:
         s, e = resolve_timestamps(None, None, "1h", unit="ns")
         assert e - s == 3_600_000 * 1_000_000
         assert e > 1_600_000_000_000_000_000
+
+    def test_lone_start_runs_to_now(self):
+        # Previously a lone --start was silently ignored; it must be honoured.
+        s, e = resolve_timestamps(1000, None, "1h")
+        assert s == 1000
+        assert e > 1_600_000_000_000  # ~now in ms
+        assert e > s
+
+    def test_lone_end_runs_back_one_range(self):
+        s, e = resolve_timestamps(None, 5_000_000, "30m")
+        assert e == 5_000_000
+        assert e - s == 30 * 60_000
+
+    def test_lone_end_respects_ns_unit(self):
+        s, e = resolve_timestamps(None, 9_000_000_000, "1h", unit="ns")
+        assert e == 9_000_000_000
+        assert e - s == 3_600_000 * 1_000_000

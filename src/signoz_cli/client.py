@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from signoz_cli.query import build_promql_query_payload, build_sql_query_payload
+
 _RETRYABLE = {429, 500, 502, 503, 504}
 
 
@@ -280,35 +282,13 @@ class SigNozClient:
         return self._post("/api/v5/query_range", json_body=payload)
 
     def query_promql(self, query: str, start: int, end: int, step: int = 60) -> Any:
-        payload = {
-            "schemaVersion": "v1",
-            "start": start,
-            "end": end,
-            "requestType": "time_series",
-            "compositeQuery": {
-                "queries": [
-                    {"type": "promql", "spec": {"name": "A", "query": query}}
-                ],
-            },
-            "formatOptions": {"fillGaps": False},
-            "variables": {},
-        }
+        # Reuse the shared builder so payload shape stays in one place and the
+        # step interval is actually forwarded (the old inline payload dropped it).
+        payload = build_promql_query_payload(start, end, query, step_interval=step)
         return self._post("/api/v5/query_range", json_body=payload)
 
     def query_sql(self, query: str, start: int, end: int) -> Any:
-        payload = {
-            "schemaVersion": "v1",
-            "start": start,
-            "end": end,
-            "requestType": "raw",
-            "compositeQuery": {
-                "queries": [
-                    {"type": "clickhouse_sql", "spec": {"name": "A", "query": query, "disabled": False}}
-                ],
-            },
-            "formatOptions": {"fillGaps": False},
-            "variables": {},
-        }
+        payload = build_sql_query_payload(start, end, query)
         return self._post("/api/v5/query_range", json_body=payload)
 
     def get_trace_detail(self, trace_id: str, start: int, end: int) -> Any:
