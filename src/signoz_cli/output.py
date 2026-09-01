@@ -12,12 +12,19 @@ from rich.console import Console
 from rich.table import Table
 
 _OUTPUT_FILE: str | None = None
+_NO_COLOR: bool = False
 
 
 def set_output_file(path: str | None) -> None:
     """Route all subsequent emit() output to *path* (-o/--output flag)."""
-    global _OUTPUT_FILE
+    global _OUTPUT_FILE  # noqa: PLW0603
     _OUTPUT_FILE = path
+
+
+def set_no_color(enabled: bool) -> None:
+    """Explicitly disable ANSI colors (--no-color / clig.dev color rules)."""
+    global _NO_COLOR  # noqa: PLW0603
+    _NO_COLOR = enabled
 
 
 def _write(text: str) -> None:
@@ -69,7 +76,9 @@ def emit(data: Any, fmt: str, table_keys: list[str] | None = None) -> None:
 
 def _print_table(data: Any, table_keys: list[str] | None = None) -> None:
     """Best-effort rich table rendering for arbitrary JSON structures."""
-    console = Console(file=io.StringIO()) if _OUTPUT_FILE else Console()
+    console = Console(file=io.StringIO(), color_system=None if _NO_COLOR else None) if _OUTPUT_FILE else (
+        Console(color_system=None) if _NO_COLOR else Console()
+    )
 
     # Unwrap common SigNoz envelopes
     if isinstance(data, dict):
