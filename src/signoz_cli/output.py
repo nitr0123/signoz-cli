@@ -1,10 +1,14 @@
-"""Output formatting helpers (JSON, table, CSV)."""
+"""Output formatting helpers (JSON, table, CSV, pager)."""
 
 from __future__ import annotations
 
 import csv
 import io
 import json
+import os
+import subprocess
+import sys
+from contextlib import contextmanager
 from typing import Any
 
 import click
@@ -13,6 +17,7 @@ from rich.table import Table
 
 _OUTPUT_FILE: str | None = None
 _NO_COLOR: bool = False
+_NO_PAGER: bool = os.getenv("NO_PAGER", "").strip() not in ("", "0", "false")
 
 
 def set_output_file(path: str | None) -> None:
@@ -25,6 +30,74 @@ def set_no_color(enabled: bool) -> None:
     """Explicitly disable ANSI colors (--no-color / clig.dev color rules)."""
     global _NO_COLOR  # noqa: PLW0603
     _NO_COLOR = enabled
+
+
+def set_no_pager(enabled: bool) -> None:
+    """Disable pager for table output (--no-pager / NO_PAGER=1)."""
+    global _NO_PAGER  # noqa: PLW0603
+    _NO_PAGER = enabled
+
+
+def _pager_enabled() -> bool:
+    """Check if pager should be used: TTY stdout, not -o/--output, not --no-pager."""
+    if _NO_PAGER:
+        return False
+    if _OUTPUT_FILE:
+        return False
+    if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+        return False
+    pager = os.getenv("PAGER")
+    if pager:
+        return True
+    # Default: less (or cat fallback)
+    return True
+
+
+@contextmanager  # type: ignore[misc]
+def _maybe_pager(fmt: str):  # type: ignore[no-untyped-def]
+    """Wrap table output in a pager (less -FRX) when appropriate."""
+    if fmt != "table" or not _pager_enabled():
+        yield None
+        return
+    # Capture all _write calls into a buffer
+    buf = io.StringIO()
+    old_write = globals().get("_write")
+    _orig_write = old_write
+
+    def _capture_write(text: str) -> None:
+        buf.write(text)
+
+    # Monkey-patch _write for this context
+    import signoz_cli.output as _mod  # noqa: PLW0603
+    _orig = _mod._write  # noqa: PLW0603
+    _mod._write = _capture_write  # type: ignore[assignment]
+    try:
+        yield None
+    finally:
+        _mod._write = _orig  # type: ignore[assignment]
+        content = buf.getvalue()
+        if content:
+            _spawn_pager(content)
+
+
+def _spawn_pager(text: str) -> None:
+    """Pipe *text* through $PAGER or `less -FRX`."""
+    pager_cmd = os.getenv("PAGER") or "less"
+    args = pager_cmd.split()
+    # Add -FRX if using less (quit-if-short, raw-chars, no-init)
+    if args[0] in ("less", "/usr/bin/less"):
+        args += ["-FRX"]
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+        proc.communicate(input=text.encode("utf-8"))
+    except (FileNotFoundError, OSError):
+        # Pager not found or failed; fall back to plain output
+        sys.stdout.write(text)
 
 
 def _write(text: str) -> None:
@@ -71,7 +144,8 @@ def emit(data: Any, fmt: str, table_keys: list[str] | None = None) -> None:
             raise click.UsageError("No rows to write.")
         _write(_to_csv([r for r in data]))
     else:
-        _print_table(data, table_keys)
+        with _maybe_pager(fmt):
+            _print_table(data, table_keys)
 
 
 def _print_table(data: Any, table_keys: list[str] | None = None) -> None:

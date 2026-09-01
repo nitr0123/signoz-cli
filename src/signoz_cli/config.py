@@ -76,3 +76,19 @@ def get_profile_credentials(
     endpoint = prof.get("endpoint") or cfg.get("endpoint")
     token = prof.get("token") or cfg.get("token")
     return endpoint, token
+
+
+def get_profile_option(
+    cfg: dict[str, Any], profile_name: str | None, key: str, default: Any = None
+) -> Any:
+    """Return a per-profile option (e.g. timeout, insecure, default_time_range, default_format)."""
+    prof = get_profiles(cfg).get(profile_name or "", {})
+    return prof.get(key, default)
+
+
+def set_profile_option(
+    data: dict[str, Any], profile_name: str, key: str, value: Any
+) -> None:
+    """Set a per-profile option value."""
+    profiles = data.setdefault("profiles", {})
+    profiles.setdefault(profile_name, {})[key] = value
