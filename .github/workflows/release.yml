@@ -18,6 +18,17 @@ jobs:
       - name: Install build tools
         run: pip install build twine
 
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Release tag '${GITHUB_REF_NAME}' does not match package version '${PKG}'." >&2
+            echo "Bump pyproject.toml (and src/signoz_cli/__init__.py) to match, or fix the tag." >&2
+            exit 1
+          fi
+          echo "Tag ${TAG} matches package version ${PKG}."
+
       - name: Build sdist and wheel
         run: |
           python -m build
