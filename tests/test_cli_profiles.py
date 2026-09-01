@@ -290,3 +290,75 @@ class TestTimeoutInsecure:
             {"SIGNOZ_ENDPOINT": "http://x:8080", "SIGNOZ_ACCESS_TOKEN": "tok"},
             "_INSECURE_HOLDER", False)
         assert captured.get("verify") is True
+
+
+class TestFormatDefault:
+    def test_env_format_defaults_output(self, runner, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://x:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok")
+        monkeypatch.setenv("SIGNOZ_FORMAT", "json")
+        # status hits the network; use a command that fails fast on creds only.
+        # profile list doesn't use _common_options; logs search does but needs client.
+        # Instead verify _format_default directly.
+        from signoz_cli.main import _format_default
+        assert _format_default() == "json"
+
+    def test_profile_format_default(self, runner):
+        runner.invoke(cli, ["configure", "-p", "jsonp",
+                            "--endpoint", "http://x:1", "--token", "tok-1234567",
+                            "--set-default"])
+        import json as _json
+
+        from signoz_cli.config import load_config
+        cfg = load_config()
+        cfg["profiles"]["jsonp"]["format"] = "json"
+        _json.dump(cfg, open(load_config.__module__ and "/tmp/opencode/x.json", "w"))  # no-op
+
+        # write format into the profile via config file
+        import signoz_cli.config as cfgmod
+        from signoz_cli.main import _format_default
+        data = cfgmod.load_config()
+        data["profiles"]["jsonp"]["format"] = "json"
+        cfgmod.save_config(data)
+        assert _format_default() == "json"
+
+    def test_default_is_table_when_unset(self, runner):
+        from signoz_cli.main import _format_default
+        assert _format_default() == "table"
+
+
+class TestCompletion:
+    def test_prints_eval_snippet(self, runner):
+        for shell in ("bash", "zsh", "fish"):
+            result = runner.invoke(cli, ["completion", shell])
+            assert result.exit_code == 0
+            assert f"_SIGNOZ_COMPLETE={shell}_source signoz" in result.output
+
+
+class TestStatus:
+    def test_status_with_fake_client(self, runner, monkeypatch):
+        import signoz_cli.main as m
+
+        class Fake:
+            def __init__(self, endpoint, token, **kwargs):
+                self.endpoint = endpoint
+
+            def close(self):
+                pass
+
+            def verify(self):
+                return {"data": {"name": "svc", "id": "acc1", "orgId": "org1"}}
+
+            def get_server_version(self):
+                return {"version": "v0.138.0"}
+
+        monkeypatch.setattr(m, "SigNozClient", Fake)
+        runner.invoke(cli, ["configure", "-p", "s", "--endpoint", "http://s:1",
+                            "--token", "tok-1234567"])
+        result = runner.invoke(cli, ["status", "-p", "s", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["server_version"] == "v0.138.0"
+        assert data["compatible"] is True
+        assert data["account"] == "svc"
+        assert data["org_id"] == "org1"
