@@ -148,6 +148,12 @@ def _mask_token(token: str | None) -> str:
     return "***"
 
 
+def _selected_profile_name(profile_name: str | None = None) -> str | None:
+    """Resolve the effective profile name (leaf > root > env > config default)."""
+    cfg = load_config()
+    return select_profile_name(cfg, profile_name or _ROOT_PROFILE, os.getenv("SIGNOZ_PROFILE"))
+
+
 def _resolve_credentials(
     endpoint: str | None, token: str | None, profile_name: str | None
 ) -> tuple[str | None, str | None]:
@@ -157,15 +163,24 @@ def _resolve_credentials(
     SIGNOZ_PROFILE env var > the config file's default profile.
     """
     cfg = load_config()
-    selected = select_profile_name(
-        cfg, profile_name or _ROOT_PROFILE, os.getenv("SIGNOZ_PROFILE")
-    )
+    selected = _selected_profile_name(profile_name)
     prof_endpoint, prof_token = get_profile_credentials(cfg, selected)
 
     resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
     resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
 
     return resolved_endpoint, resolved_token
+
+
+def _format_default() -> str:
+    """Default output format: SIGNOZ_FORMAT env > selected profile's `format` > table."""
+    env_val = os.getenv("SIGNOZ_FORMAT")
+    if env_val in ("json", "table", "csv"):
+        return env_val
+    cfg = load_config()
+    selected = _selected_profile_name()
+    prof_format = get_profiles(cfg).get(selected or "", {}).get("format")
+    return prof_format if prof_format in ("json", "table", "csv") else "table"
 
 
 def _set_json_flag(ctx: click.Context, param: click.Parameter, value: bool) -> None:
@@ -213,9 +228,9 @@ def _common_options(f):
         "--format",
         "fmt",
         type=click.Choice(["json", "table", "csv"]),
-        default="table",
-        show_default=True,
-        help="Output format.",
+        default=_format_default,
+        show_default="table",
+        help="Output format (default: SIGNOZ_FORMAT or profile `format`, else table).",
     )(f)
     f = click.option(
         "--json",
@@ -1629,6 +1644,50 @@ def traces_field_values(
 # ===================================================================
 # QUERY (raw Query Builder v5)
 # ===================================================================
+
+
+@cli.command("completion")
+@click.argument(
+    "shell",
+    type=click.Choice(["bash", "zsh", "fish"]),
+    default="bash",
+    required=False,
+)
+def completion(shell: str) -> None:
+    """Print shell-completion setup for bash/zsh/fish.
+
+    Add the printed line to your shell rc file, or run it once in the session.
+    """
+    click.echo(f"# Add this to your {shell} configuration:")
+    click.echo(f'eval "$(_SIGNOZ_COMPLETE={shell}_source signoz)"')
+
+
+@cli.command("status")
+@_common_options
+def status_cmd(endpoint: str | None, token: str | None, fmt: str,
+               profile: str | None) -> None:
+    """Show connectivity, server version and account info in one glance."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        me = client.verify()
+        account = me.get("data", me) if isinstance(me, dict) else me
+        server_version = ""
+        try:
+            server_version = (client.get_server_version() or {}).get("version", "")
+        except Exception:
+            server_version = ""
+        status = {
+            "endpoint": client.endpoint,
+            "profile": _selected_profile_name(profile) or "<none>",
+            "server_version": server_version or "<unknown>",
+            "compatible": _is_supported_server(server_version),
+            "account": account.get("name", "") if isinstance(account, dict) else "",
+            "account_id": account.get("id", "") if isinstance(account, dict) else "",
+            "org_id": account.get("orgId", "") if isinstance(account, dict) else "",
+        }
+        emit(status, fmt)
+    except Exception as e:
+        _handle_error(e)
 
 
 @cli.command("query")
