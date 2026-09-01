@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import difflib
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from signoz_cli.config import (
     save_config,
     select_profile_name,
 )
-from signoz_cli.output import emit, set_output_file
+from signoz_cli.output import emit, set_no_color, set_output_file
 from signoz_cli.query import (
     build_aggregate_query_payload,
     build_logs_query_payload,
@@ -76,6 +77,7 @@ _HISTORY_TABLE_KEYS = [
 _ROOT_PROFILE: str | None = None
 _TIMEOUT_HOLDER: dict[str, float | None] = {"value": None}
 _INSECURE_HOLDER: dict[str, bool] = {"value": False}
+_NO_INPUT_HOLDER: dict[str, bool] = {"value": False}
 
 
 def _set_timeout(ctx: click.Context, param: click.Parameter, value: float | None) -> None:
@@ -84,6 +86,34 @@ def _set_timeout(ctx: click.Context, param: click.Parameter, value: float | None
 
 def _set_insecure(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     _INSECURE_HOLDER["value"] = value
+
+
+def _set_no_input(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    _NO_INPUT_HOLDER["value"] = value
+
+
+def _set_no_color(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    set_no_color(value)
+
+
+def _confirm(prompt: str) -> None:
+    """Confirm a destructive action, honouring --no-input (clig.dev)."""
+    if _NO_INPUT_HOLDER["value"]:
+        raise click.UsageError(
+            f"{prompt} (pass --yes to skip the prompt, or drop --no-input)"
+        )
+    click.confirm(prompt, abort=True)
+
+
+def _read_json(path: str) -> Any:
+    """Read a JSON payload from a file, or from stdin when path is '-'.
+
+    clig.dev: support '-' for stdin where a file argument is expected.
+    """
+    if path == "-":
+        return json.load(sys.stdin)
+    with open(path) as fh:
+        return json.load(fh)
 
 
 def _parse_version(version: str) -> tuple[int, ...]:
@@ -266,6 +296,24 @@ def _common_options(f):
         callback=_set_insecure,
         help="Skip TLS certificate verification (env: SIGNOZ_INSECURE=1).",
     )(f)
+    f = click.option(
+        "--no-color",
+        is_flag=True,
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_no_color,
+        help="Disable ANSI colors in table output.",
+    )(f)
+    f = click.option(
+        "--no-input",
+        is_flag=True,
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_no_input,
+        help="Never prompt; fail instead of asking for confirmation.",
+    )(f)
     return f
 
 
@@ -330,6 +378,10 @@ def _get_client(
 
 
 def _handle_error(e: Exception) -> None:
+    if isinstance(e, click.UsageError):
+        # misuse (bad option combination, --no-input confirm, ...) -> exit 2
+        click.echo(f"Error: {e.message}", err=True)
+        sys.exit(2)
     if isinstance(e, SigNozApiError):
         click.echo(f"Error: {e.message} (HTTP {e.status_code})", err=True)
     elif isinstance(e, httpx.ConnectError):
@@ -350,13 +402,36 @@ def _handle_error(e: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]},
+class SuggestGroup(click.Group):
+    """A Group that suggests close command names on typos (clig.dev: guess intent)."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        cmd = super().get_command(ctx, cmd_name)
+        if cmd is None:
+            close = difflib.get_close_matches(
+                cmd_name, self.list_commands(ctx), n=1, cutoff=0.6
+            )
+            if close:
+                ctx.fail(
+                    f"No such command '{cmd_name}'. Did you mean '{close[0]}'?"
+                )
+        return cmd
+
+
+@click.group(cls=SuggestGroup,
+             context_settings={"help_option_names": ["-h", "--help"]},
              epilog="Docs: https://signoz.io/docs/  |  "
                     "Issues: https://github.com/SigNoz/signoz/issues")
 @click.option("-p", "--profile", "root_profile", default=None,
               help="Named connection profile to use for this invocation "
                    "(env: SIGNOZ_PROFILE; falls back to the default profile). "
                    "Accepted before or after the subcommand.")
+@click.option("--no-input", is_flag=True, expose_value=False, is_eager=True,
+              callback=_set_no_input,
+              help="Never prompt; fail instead of asking for confirmation.")
+@click.option("--no-color", is_flag=True, expose_value=False, is_eager=True,
+              callback=_set_no_color,
+              help="Disable ANSI colors in table output.")
 @click.version_option(version=__version__, prog_name="signoz-cli")
 @click.pass_context
 def cli(ctx: click.Context, root_profile: str | None) -> None:
@@ -498,7 +573,7 @@ def profile_remove(name: str, yes: bool) -> None:
     if name not in profiles:
         raise click.UsageError(f"Unknown profile '{name}'. See 'signoz profile list'.")
     if not yes:
-        click.confirm(f"Remove profile '{name}'?", abort=True)
+        _confirm(f"Remove profile '{name}'?")
     del profiles[name]
     cfg["profiles"] = profiles
     if cfg.get("default") == name:
@@ -961,15 +1036,14 @@ def dashboards_get(
 
 @dashboards.command("create")
 @_common_options
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def dashboards_create(
     endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, json_file: str
 ) -> None:
     """Create a dashboard from a JSON file (v2 spec schema)."""
     try:
-        with open(json_file) as f:
-            dashboard = json.load(f)
+        dashboard = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         data = client.create_dashboard_v2(dashboard)
         emit(data, fmt)
@@ -980,15 +1054,14 @@ def dashboards_create(
 @dashboards.command("update")
 @_common_options
 @click.argument("dashboard_id")
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def dashboards_update(
     endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, dashboard_id: str, json_file: str
 ) -> None:
     """Replace a dashboard from a JSON file (full PUT, v2 API)."""
     try:
-        with open(json_file) as f:
-            dashboard = json.load(f)
+        dashboard = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         data = client.update_dashboard_v2(dashboard_id, dashboard)
         emit(data or {"status": "updated"}, fmt)
@@ -999,7 +1072,7 @@ def dashboards_update(
 @dashboards.command("patch")
 @_common_options
 @click.argument("dashboard_id")
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def dashboards_patch(
     endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, dashboard_id: str, json_file: str
@@ -1010,8 +1083,7 @@ def dashboards_patch(
       [{"op": "add", "path": "/tags/-", "value": {"key": "env", "value": "prod"}}]
     """
     try:
-        with open(json_file) as f:
-            patches = json.load(f)
+        patches = _read_json(json_file)
         if not isinstance(patches, list):
             raise click.UsageError("Patch file must contain a JSON array of operations.")
         client = _get_client(endpoint, token, profile)
@@ -1025,14 +1097,18 @@ def dashboards_patch(
 @_common_options
 @click.argument("dashboard_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 def dashboards_delete(
     endpoint: str | None, token: str | None, fmt: str,
-    profile: str | None, dashboard_id: str, yes: bool
+    profile: str | None, dashboard_id: str, yes: bool, dry_run: bool
 ) -> None:
     """Delete a dashboard (v2 API)."""
     try:
+        if dry_run:
+            emit({"action": "delete", "resource": "dashboard", "id": dashboard_id}, fmt)
+            return
         if not yes:
-            click.confirm(f"Delete dashboard {dashboard_id}?", abort=True)
+            _confirm(f"Delete dashboard {dashboard_id}?")
         client = _get_client(endpoint, token, profile)
         data = client.delete_dashboard_v2(dashboard_id)
         emit(data, fmt)
@@ -1692,13 +1768,12 @@ def status_cmd(endpoint: str | None, token: str | None, fmt: str,
 
 @cli.command("query")
 @_common_options
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def query_raw(endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, json_file: str) -> None:
     """Execute a raw Query Builder v5 query from a JSON file."""
     try:
-        with open(json_file) as f:
-            payload = json.load(f)
+        payload = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt)
@@ -2005,13 +2080,12 @@ def logs_tail(
 
 @alerts.command("create")
 @_common_options
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def alerts_create(endpoint: str | None, token: str | None, fmt: str,
                   profile: str | None, json_file: str) -> None:
     """Create an alert rule from a JSON file (v2 rule schema)."""
     try:
-        with open(json_file) as f:
-            rule = json.load(f)
+        rule = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         data = client.create_rule(rule)
         emit(data, fmt)
@@ -2022,13 +2096,12 @@ def alerts_create(endpoint: str | None, token: str | None, fmt: str,
 @alerts.command("update")
 @_common_options
 @click.argument("rule_id")
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def alerts_update(endpoint: str | None, token: str | None, fmt: str,
                   profile: str | None, rule_id: str, json_file: str) -> None:
     """Replace an alert rule from a JSON file (full PUT)."""
     try:
-        with open(json_file) as f:
-            rule = json.load(f)
+        rule = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         data = client.update_rule(rule_id, rule)
         emit(data or {"status": "updated"}, fmt)
@@ -2039,13 +2112,12 @@ def alerts_update(endpoint: str | None, token: str | None, fmt: str,
 @alerts.command("patch")
 @_common_options
 @click.argument("rule_id")
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def alerts_patch(endpoint: str | None, token: str | None, fmt: str,
                  profile: str | None, rule_id: str, json_file: str) -> None:
     """Apply partial updates to a rule (JSON-Patch ops merged client-side)."""
     try:
-        with open(json_file) as f:
-            patches = json.load(f)
+        patches = _read_json(json_file)
         if not isinstance(patches, list):
             raise click.UsageError("Patch file must contain a JSON array.")
         client = _get_client(endpoint, token, profile)
@@ -2066,12 +2138,16 @@ def alerts_patch(endpoint: str | None, token: str | None, fmt: str,
 @_common_options
 @click.argument("rule_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 def alerts_delete(endpoint: str | None, token: str | None, fmt: str,
-                  profile: str | None, rule_id: str, yes: bool) -> None:
+                  profile: str | None, rule_id: str, yes: bool, dry_run: bool) -> None:
     """Delete an alert rule."""
     try:
+        if dry_run:
+            emit({"action": "delete", "resource": "alert rule", "id": rule_id}, fmt)
+            return
         if not yes:
-            click.confirm(f"Delete alert rule {rule_id}?", abort=True)
+            _confirm(f"Delete alert rule {rule_id}?")
         client = _get_client(endpoint, token, profile)
         emit(client.delete_rule(rule_id), fmt)
     except Exception as e:
@@ -2080,7 +2156,7 @@ def alerts_delete(endpoint: str | None, token: str | None, fmt: str,
 
 @alerts.command("test")
 @_common_options
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 @click.option("--start", type=int, default=None, help="Test-window start (ms).")
 @click.option("--end", type=int, default=None, help="Test-window end (ms).")
 @click.option("--time-range", default="1h", show_default=True, help="Test window.")
@@ -2089,8 +2165,7 @@ def alerts_test(endpoint: str | None, token: str | None, fmt: str,
                 start: int | None, end: int | None, time_range: str) -> None:
     """Dry-run a rule payload and see what would fire."""
     try:
-        with open(json_file) as f:
-            rule = json.load(f)
+        rule = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h")
         rule = dict(rule)
@@ -2139,13 +2214,12 @@ def channels_get(endpoint: str | None, token: str | None, fmt: str,
 
 @channels.command("create")
 @_common_options
-@click.argument("json_file", type=click.Path(exists=True))
+@click.argument("json_file", type=click.Path())
 def channels_create(endpoint: str | None, token: str | None, fmt: str,
                     profile: str | None, json_file: str) -> None:
     """Create a channel from a JSON file."""
     try:
-        with open(json_file) as f:
-            channel = json.load(f)
+        channel = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
         emit(client.create_channel(channel), fmt)
     except Exception as e:
@@ -2156,12 +2230,16 @@ def channels_create(endpoint: str | None, token: str | None, fmt: str,
 @_common_options
 @click.argument("channel_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 def channels_delete(endpoint: str | None, token: str | None, fmt: str,
-                    profile: str | None, channel_id: str, yes: bool) -> None:
+                    profile: str | None, channel_id: str, yes: bool, dry_run: bool) -> None:
     """Delete a channel."""
     try:
+        if dry_run:
+            emit({"action": "delete", "resource": "channel", "id": channel_id}, fmt)
+            return
         if not yes:
-            click.confirm(f"Delete channel {channel_id}?", abort=True)
+            _confirm(f"Delete channel {channel_id}?")
         client = _get_client(endpoint, token, profile)
         emit(client.delete_channel(channel_id), fmt)
     except Exception as e:
@@ -2210,12 +2288,16 @@ def views_get(endpoint: str | None, token: str | None, fmt: str,
 @_common_options
 @click.argument("view_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 def views_delete(endpoint: str | None, token: str | None, fmt: str,
-                 profile: str | None, view_id: str, yes: bool) -> None:
+                 profile: str | None, view_id: str, yes: bool, dry_run: bool) -> None:
     """Delete a saved view."""
     try:
+        if dry_run:
+            emit({"action": "delete", "resource": "saved view", "id": view_id}, fmt)
+            return
         if not yes:
-            click.confirm(f"Delete saved view {view_id}?", abort=True)
+            _confirm(f"Delete saved view {view_id}?")
         client = _get_client(endpoint, token, profile)
         emit(client.delete_saved_view(view_id), fmt)
     except Exception as e:
@@ -2306,12 +2388,16 @@ def service_accounts_create(endpoint: str | None, token: str | None, fmt: str,
 @_common_options
 @click.argument("account_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 def service_accounts_delete(endpoint: str | None, token: str | None, fmt: str,
-                            profile: str | None, account_id: str, yes: bool) -> None:
+                            profile: str | None, account_id: str, yes: bool, dry_run: bool) -> None:
     """Delete a service account (revokes all its keys)."""
     try:
+        if dry_run:
+            emit({"action": "delete", "resource": "service account", "id": account_id}, fmt)
+            return
         if not yes:
-            click.confirm(f"Delete service account {account_id}?", abort=True)
+            _confirm(f"Delete service account {account_id}?")
         client = _get_client(endpoint, token, profile)
         emit(client.delete_service_account(account_id), fmt)
     except Exception as e:

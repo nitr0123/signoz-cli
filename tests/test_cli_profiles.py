@@ -362,3 +362,103 @@ class TestStatus:
         assert data["compatible"] is True
         assert data["account"] == "svc"
         assert data["org_id"] == "org1"
+
+
+class TestTypoSuggestion:
+    def test_typo_suggests_close_command(self, runner):
+        result = runner.invoke(cli, ["logss"])
+        assert result.exit_code == 2
+        assert "Did you mean 'logs'" in result.output
+
+    def test_far_typo_no_suggestion(self, runner):
+        result = runner.invoke(cli, ["zzzz"])
+        assert result.exit_code == 2
+        assert "Did you mean" not in result.output
+
+
+class TestNoInput:
+    def test_delete_without_yes_and_no_input_fails(self, runner):
+        runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
+                            "--token", "tok-1234567"])
+        # dashboards delete with --no-input and no --yes must not prompt
+        result = runner.invoke(cli, ["dashboards", "delete", "x",
+                                     "--no-input", "-p", "d"])
+        assert result.exit_code == 2
+        assert "--yes" in result.output or "no-input" in result.output
+
+
+class TestDryRun:
+    def test_delete_dry_run_does_not_call_client(self, runner, monkeypatch):
+        import signoz_cli.main as m
+
+        called = {"delete": False}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def delete_dashboard_v2(self, dashboard_id):
+                called["delete"] = True
+                return {"status": "ok"}
+
+        monkeypatch.setattr(m, "SigNozClient", Fake)
+        runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
+                            "--token", "tok-1234567"])
+        result = runner.invoke(cli, ["dashboards", "delete", "abc",
+                                     "--dry-run", "--json", "-p", "d"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["action"] == "delete"
+        assert called["delete"] is False
+
+
+class TestStdin:
+    def test_dashboards_create_from_stdin(self, runner, monkeypatch):
+        import signoz_cli.main as m
+
+        created = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def create_dashboard_v2(self, dashboard):
+                created["dash"] = dashboard
+                return {"status": "success", "data": {"id": "d1"}}
+
+        monkeypatch.setattr(m, "SigNozClient", Fake)
+        runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
+                            "--token", "tok-1234567"])
+        payload = json.dumps({"name": "from-stdin", "schemaVersion": "v6", "spec": {}})
+        result = runner.invoke(cli, ["dashboards", "create", "-", "-p", "d",
+                                     "--json"], input=payload)
+        assert result.exit_code == 0, result.output
+        assert created["dash"]["name"] == "from-stdin"
+
+
+class TestNoColor:
+    def test_no_color_removes_ansi(self, runner, monkeypatch):
+        import signoz_cli.main as m
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "raw", "data": {
+                    "results": [{"queryName": "A", "rows": [{"data": {"body": "x"}}]}]}}}
+
+        monkeypatch.setattr(m, "SigNozClient", Fake)
+        runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
+                            "--token", "tok-1234567"])
+        result = runner.invoke(cli, ["logs", "search", "--no-color", "-p", "d"])
+        assert result.exit_code == 0, result.output
+        assert "\x1b[" not in result.output
