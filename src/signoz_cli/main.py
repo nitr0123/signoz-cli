@@ -211,7 +211,8 @@ def _profile_time_range(profile_name: str | None) -> str | None:
     """Return the profile's default_time_range, or None if not configured."""
     cfg = load_config()
     selected = _selected_profile_name(profile_name)
-    return get_profile_option(cfg, selected, "default_time_range")
+    val: str | None = get_profile_option(cfg, selected, "default_time_range")
+    return val
 
 
 def _format_default() -> str:
@@ -233,8 +234,9 @@ def _resolve_format_callback(
     so we check for those first.
     """
     # If --json or --csv already set the format, honour that
-    if ctx.params.get("fmt") in ("json", "csv"):
-        return ctx.params["fmt"]
+    fmt_val: str = ctx.params.get("fmt", "table")
+    if fmt_val in ("json", "csv"):
+        return fmt_val
 
     # Explicit -f was passed (value != "table" default)
     if value != "table":
@@ -253,7 +255,7 @@ def _resolve_format_callback(
     if profile_name:
         cfg = load_config()
         prof = get_profiles(cfg).get(profile_name, {})
-        prof_fmt = prof.get("default_format")
+        prof_fmt: str = prof.get("default_format", "")
         if prof_fmt in ("json", "table", "csv"):
             return prof_fmt
 
@@ -690,7 +692,7 @@ def auth_verify(endpoint: str | None, token: str | None, fmt: str,
         data = client.verify()
         try:
             server_version = (client.get_server_version() or {}).get("version", "")
-        except Exception: 
+        except Exception:
             server_version = ""
         result = {
             "service_account": data,
@@ -2530,7 +2532,7 @@ def _logs_query_all(
         )
         page = _unwrap_v5(client.query_builder_v5(payload))
         if not isinstance(page, list):
-            return page  # error passthrough
+            return page  # type: ignore[return-value]  # error passthrough
         rows.extend(page)
         if len(page) < limit:
             break
@@ -2559,7 +2561,7 @@ def _traces_query_all(
         payload = build_traces_query_payload(s, e, filter_expr, limit=limit, offset=offset)
         page = _unwrap_v5(client.query_builder_v5(payload))
         if not isinstance(page, list):
-            return page  # error passthrough
+            return page  # type: ignore[return-value]  # error passthrough
         rows.extend(page)
         if len(page) < limit:
             break

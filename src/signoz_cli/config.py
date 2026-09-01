@@ -40,7 +40,8 @@ def load_config() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text())
+        data = json.loads(CONFIG_FILE.read_text())
+        return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError) as exc:
         if not _CONFIG_WARNED:
             print(f"Warning: could not read config {CONFIG_FILE}: {exc}", file=sys.stderr)

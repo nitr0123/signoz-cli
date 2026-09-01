@@ -310,8 +310,8 @@ class TestFormatDefault:
         data = cfgmod.load_config()
         data["profiles"]["jsonp"]["default_format"] = "json"
         cfgmod.save_config(data)
-        from signoz_cli.main import _resolve_format_callback, _ROOT_PROFILE
         import signoz_cli.main as m
+        from signoz_cli.main import _resolve_format_callback
         m._ROOT_PROFILE = "jsonp"
         ctx = click.Context(click.Command("test"))
         assert _resolve_format_callback(ctx, None, "table") == "json"
