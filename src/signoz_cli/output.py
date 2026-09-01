@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -53,8 +54,8 @@ def _pager_enabled() -> bool:
     return True
 
 
-@contextmanager  # type: ignore[misc]
-def _maybe_pager(fmt: str):  # type: ignore[no-untyped-def]
+@contextmanager
+def _maybe_pager(fmt: str) -> Iterator[None]:
     """Wrap table output in a pager (less -FRX) when appropriate."""
     if fmt != "table" or not _pager_enabled():
         yield None
@@ -70,11 +71,11 @@ def _maybe_pager(fmt: str):  # type: ignore[no-untyped-def]
     # Monkey-patch _write for this context
     import signoz_cli.output as _mod  # noqa: PLW0603
     _orig = _mod._write  # noqa: PLW0603
-    _mod._write = _capture_write  # type: ignore[assignment]
+    _mod._write = _capture_write
     try:
         yield None
     finally:
-        _mod._write = _orig  # type: ignore[assignment]
+        _mod._write = _orig
         content = buf.getvalue()
         if content:
             _spawn_pager(content)
@@ -142,7 +143,7 @@ def emit(data: Any, fmt: str, table_keys: list[str] | None = None) -> None:
             )
         if not data:
             raise click.UsageError("No rows to write.")
-        _write(_to_csv([r for r in data]))
+        _write(_to_csv(list(data)))
     else:
         with _maybe_pager(fmt):
             _print_table(data, table_keys)
