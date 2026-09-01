@@ -2,6 +2,7 @@
 
 import json
 
+import click
 import httpx
 import pytest
 from click.testing import CliRunner
@@ -297,34 +298,55 @@ class TestFormatDefault:
         monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://x:8080")
         monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok")
         monkeypatch.setenv("SIGNOZ_FORMAT", "json")
-        # status hits the network; use a command that fails fast on creds only.
-        # profile list doesn't use _common_options; logs search does but needs client.
-        # Instead verify _format_default directly.
-        from signoz_cli.main import _format_default
-        assert _format_default() == "json"
+        from signoz_cli.main import _resolve_format_callback
+        ctx = click.Context(click.Command("test"))
+        assert _resolve_format_callback(ctx, None, "table") == "json"
 
     def test_profile_format_default(self, runner):
         runner.invoke(cli, ["configure", "-p", "jsonp",
                             "--endpoint", "http://x:1", "--token", "tok-1234567",
                             "--set-default"])
-        import json as _json
-
-        from signoz_cli.config import load_config
-        cfg = load_config()
-        cfg["profiles"]["jsonp"]["format"] = "json"
-        _json.dump(cfg, open(load_config.__module__ and "/tmp/opencode/x.json", "w"))  # no-op
-
-        # write format into the profile via config file
         import signoz_cli.config as cfgmod
-        from signoz_cli.main import _format_default
         data = cfgmod.load_config()
-        data["profiles"]["jsonp"]["format"] = "json"
+        data["profiles"]["jsonp"]["default_format"] = "json"
         cfgmod.save_config(data)
-        assert _format_default() == "json"
+        from signoz_cli.main import _resolve_format_callback, _ROOT_PROFILE
+        import signoz_cli.main as m
+        m._ROOT_PROFILE = "jsonp"
+        ctx = click.Context(click.Command("test"))
+        assert _resolve_format_callback(ctx, None, "table") == "json"
+        m._ROOT_PROFILE = None  # reset
 
     def test_default_is_table_when_unset(self, runner):
-        from signoz_cli.main import _format_default
-        assert _format_default() == "table"
+        from signoz_cli.main import _resolve_format_callback
+        ctx = click.Context(click.Command("test"))
+        assert _resolve_format_callback(ctx, None, "table") == "table"
+
+    def test_explicit_f_flag_overrides_profile(self, runner):
+        import signoz_cli.config as cfgmod
+        data = cfgmod.load_config()
+        data["profiles"] = data.get("profiles", {})
+        data["profiles"]["fp"] = {"endpoint": "http://x:1", "token": "tok",
+                                   "default_format": "json"}
+        data["default"] = "fp"
+        cfgmod.save_config(data)
+        from signoz_cli.main import _resolve_format_callback
+        ctx = click.Context(click.Command("test"))
+        # explicit -f csv beats profile default json
+        assert _resolve_format_callback(ctx, None, "csv") == "csv"
+
+    def test_json_flag_beats_profile(self, runner, monkeypatch):
+        import signoz_cli.config as cfgmod
+        data = cfgmod.load_config()
+        data["profiles"] = data.get("profiles", {})
+        data["profiles"]["fp2"] = {"endpoint": "http://x:1", "token": "tok",
+                                    "default_format": "json"}
+        data["default"] = "fp2"
+        cfgmod.save_config(data)
+        from signoz_cli.main import _resolve_format_callback
+        ctx = click.Context(click.Command("test"))
+        ctx.params = {"fmt": "json"}  # --json eager callback set this
+        assert _resolve_format_callback(ctx, None, "table") == "json"
 
 
 class TestCompletion:

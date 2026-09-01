@@ -19,12 +19,13 @@ from signoz_cli.client import SigNozApiError, SigNozClient
 from signoz_cli.config import (
     CONFIG_FILE,
     get_profile_credentials,
+    get_profile_option,
     get_profiles,
     load_config,
     save_config,
     select_profile_name,
 )
-from signoz_cli.output import emit, set_no_color, set_output_file
+from signoz_cli.output import emit, set_no_color, set_no_pager, set_output_file
 from signoz_cli.query import (
     build_aggregate_query_payload,
     build_logs_query_payload,
@@ -94,6 +95,10 @@ def _set_no_input(ctx: click.Context, param: click.Parameter, value: bool) -> No
 
 def _set_no_color(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     set_no_color(value)
+
+
+def _set_no_pager(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    set_no_pager(value)
 
 
 def _confirm(prompt: str) -> None:
@@ -202,15 +207,57 @@ def _resolve_credentials(
     return resolved_endpoint, resolved_token
 
 
+def _profile_time_range(profile_name: str | None) -> str | None:
+    """Return the profile's default_time_range, or None if not configured."""
+    cfg = load_config()
+    selected = _selected_profile_name(profile_name)
+    return get_profile_option(cfg, selected, "default_time_range")
+
+
 def _format_default() -> str:
-    """Default output format: SIGNOZ_FORMAT env > selected profile's `format` > table."""
+    """Default output format: SIGNOZ_FORMAT env > selected profile's `default_format` > table.
+
+    At decoration time this returns 'table' (profile not resolved yet).
+    The real resolution happens in _resolve_format_callback.
+    """
+    return "table"
+
+
+def _resolve_format_callback(
+    ctx: click.Context, param: click.Parameter, value: str
+) -> str:
+    """Callback for --format option: resolve profile defaults at runtime.
+
+    Priority: --json/--csv flag > -f explicit value > SIGNOZ_FORMAT env > profile default > table.
+    The --json/--csv eager callbacks set ctx.params["fmt"] before this runs,
+    so we check for those first.
+    """
+    # If --json or --csv already set the format, honour that
+    if ctx.params.get("fmt") in ("json", "csv"):
+        return ctx.params["fmt"]
+
+    # Explicit -f was passed (value != "table" default)
+    if value != "table":
+        return value
+
+    # Check SIGNOZ_FORMAT env
     env_val = os.getenv("SIGNOZ_FORMAT")
     if env_val in ("json", "table", "csv"):
         return env_val
-    cfg = load_config()
-    selected = _selected_profile_name()
-    prof_format = get_profiles(cfg).get(selected or "", {}).get("format")
-    return prof_format if prof_format in ("json", "table", "csv") else "table"
+
+    # Check profile default_format.
+    # At this point _ROOT_PROFILE may or may not be set (root callback runs first),
+    # and ctx.params may have a leaf -p (processed after this callback).
+    # Check both sources to cover all ordering cases.
+    profile_name = ctx.params.get("profile") or _ROOT_PROFILE
+    if profile_name:
+        cfg = load_config()
+        prof = get_profiles(cfg).get(profile_name, {})
+        prof_fmt = prof.get("default_format")
+        if prof_fmt in ("json", "table", "csv"):
+            return prof_fmt
+
+    return "table"
 
 
 def _set_json_flag(ctx: click.Context, param: click.Parameter, value: bool) -> None:
@@ -258,9 +305,10 @@ def _common_options(f):
         "--format",
         "fmt",
         type=click.Choice(["json", "table", "csv"]),
-        default=_format_default,
+        default="table",
         show_default="table",
-        help="Output format (default: SIGNOZ_FORMAT or profile `format`, else table).",
+        callback=_resolve_format_callback,
+        help="Output format (default: SIGNOZ_FORMAT or profile `default_format`, else table).",
     )(f)
     f = click.option(
         "--json",
@@ -313,6 +361,15 @@ def _common_options(f):
         is_eager=True,
         callback=_set_no_input,
         help="Never prompt; fail instead of asking for confirmation.",
+    )(f)
+    f = click.option(
+        "--no-pager",
+        is_flag=True,
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_set_no_pager,
+        help="Disable pager for table output (env: NO_PAGER=1).",
     )(f)
     return f
 
@@ -466,11 +523,18 @@ def cli(ctx: click.Context, root_profile: str | None) -> None:
 )
 @click.option("--set-default/--no-set-default", default=None,
               help="Make this profile the default (default: yes for the first profile).")
+@click.option("--default-time-range", default=None,
+              help="Default time range for queries on this profile (e.g. 24h, 7d).")
+@click.option("--default-format", default=None,
+              type=click.Choice(["json", "table", "csv"]),
+              help="Default output format for this profile (table/json/csv).")
 def configure(
     profile_name: str,
     endpoint: str,
     token: str,
     set_default: bool | None,
+    default_time_range: str | None,
+    default_format: str | None,
 ) -> None:
     """Save SigNoz credentials as a named profile in ~/.signoz/config.json.
 
@@ -486,6 +550,10 @@ def configure(
         "endpoint": endpoint.rstrip("/"),
         "token": token,
     }
+    if default_time_range:
+        profiles[profile_name]["default_time_range"] = default_time_range
+    if default_format:
+        profiles[profile_name]["default_format"] = default_format
     cfg["profiles"] = profiles
     if set_default is True or (
         set_default is None and cfg.get("default") is None
@@ -524,6 +592,8 @@ def profile_list(fmt: str) -> None:
             "endpoint": p.get("endpoint", ""),
             "token": _mask_token(p.get("token")),
             "default": "*" if name == cfg.get("default") else "",
+            "default_time_range": p.get("default_time_range", ""),
+            "default_format": p.get("default_format", ""),
         })
     if not rows and cfg.get("endpoint"):
         rows.append({
@@ -531,6 +601,8 @@ def profile_list(fmt: str) -> None:
             "endpoint": cfg["endpoint"],
             "token": _mask_token(cfg.get("token")),
             "default": "*",
+            "default_time_range": "",
+            "default_format": "",
         })
     emit({"data": rows}, fmt)
 
@@ -560,6 +632,8 @@ def profile_show(name: str) -> None:
         "endpoint": prof.get("endpoint", ""),
         "token": _mask_token(prof.get("token")),
         "default": name == cfg.get("default"),
+        "default_time_range": prof.get("default_time_range", ""),
+        "default_format": prof.get("default_format", ""),
     }, "json")
 
 
@@ -820,7 +894,7 @@ def alerts_history(
     """Get alert history timeline for a rule (v2 API with cursor pagination)."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         data = client.get_alert_history_timeline(
             rule_id,
             s,
@@ -873,7 +947,7 @@ def alerts_history_stats(
     """Get aggregate statistics for a rule's history (v2 API)."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="24h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h", profile_time_range=_profile_time_range(profile))
         data = client.get_alert_history_stats(rule_id, s, e)
         emit(data, fmt)
     except Exception as ex:
@@ -897,7 +971,7 @@ def alerts_overall_status(
     """Get overall status of a rule over a time range (v2 API)."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="24h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h", profile_time_range=_profile_time_range(profile))
         data = client.get_alert_history_overall_status(rule_id, s, e)
         emit(data, fmt)
     except Exception as ex:
@@ -921,7 +995,7 @@ def alerts_top_contributors(
     """Get top contributing label sets for a rule's history (v2 API)."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="24h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h", profile_time_range=_profile_time_range(profile))
         data = client.get_alert_history_top_contributors(rule_id, s, e)
         emit(_stringify_labels(data), fmt, table_keys=["fingerprint", "labels", "count"])
     except Exception as ex:
@@ -1143,7 +1217,7 @@ def services_list(
     """List all services within a time range."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns", profile_time_range=_profile_time_range(profile))
         data = client.list_services(str(s), str(e))
         emit(data, fmt)
     except Exception as ex:
@@ -1171,7 +1245,7 @@ def services_top_operations(
     """Get top operations for a specific service."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", unit="ns", profile_time_range=_profile_time_range(profile))
         parsed_tags = json.loads(tags) if tags else None
         data = client.get_service_top_operations(
             service, str(s), str(e), tags=parsed_tags
@@ -1238,7 +1312,7 @@ def logs_search(
     try:
         client = _get_client(endpoint, token, profile)
         filter_expr = _build_log_filter(query, service, severity, search_text)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         if fetch_all:
             data = _logs_query_all(client, s, e, filter_expr, limit=100)
         else:
@@ -1276,7 +1350,7 @@ def logs_errors(
         if service:
             parts.append(f"service.name = '{_q(service)}'")
         filter_expr = " AND ".join(parts)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         payload = build_logs_query_payload(s, e, filter_expr, limit=limit)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt)
@@ -1310,7 +1384,7 @@ def logs_by_service(
     try:
         client = _get_client(endpoint, token, profile)
         filter_expr = _build_log_filter(None, service, severity, search_text)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         payload = build_logs_query_payload(s, e, filter_expr, limit=limit)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt)
@@ -1375,7 +1449,7 @@ def logs_aggregate(
         combined_filter = _build_log_filter(filter_expr, service, severity, None)
         group_by_fields = _parse_group_by(group_by, "logs")
         order_expr, order_dir = _parse_order_by(order_by, agg_expr)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         payload = build_aggregate_query_payload(
             "logs",
             s,
@@ -1481,7 +1555,7 @@ def traces_search(
             filter_expr = _append_filter(filter_expr, f"durationNano >= {min_duration}")
         if max_duration is not None:
             filter_expr = _append_filter(filter_expr, f"durationNano <= {max_duration}")
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         if fetch_all:
             data = _traces_query_all(client, s, e, filter_expr, limit=100)
         else:
@@ -1532,7 +1606,7 @@ def traces_by_service(
             filter_expr = _append_filter(filter_expr, f"durationNano >= {min_duration}")
         if max_duration is not None:
             filter_expr = _append_filter(filter_expr, f"durationNano <= {max_duration}")
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt, table_keys=_TRACE_TABLE_KEYS)
@@ -1559,7 +1633,7 @@ def traces_get(
     """Get all spans of a trace by trace ID."""
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         filter_expr = f"traceID = '{_q(trace_id)}'"
         payload = build_traces_query_payload(s, e, filter_expr, limit=1000)
         data = _unwrap_v5(client.query_builder_v5(payload))
@@ -1593,7 +1667,7 @@ def traces_errors(
         if service:
             parts.append(f"service.name in ['{_q(service)}']")
         filter_expr = " AND ".join(parts)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         payload = build_traces_query_payload(s, e, filter_expr, limit=limit)
         data = _unwrap_v5(client.query_builder_v5(payload))
         emit(data, fmt, table_keys=_TRACE_TABLE_KEYS)
@@ -1666,7 +1740,7 @@ def traces_aggregate(
         )
         group_by_fields = _parse_group_by(group_by, "traces")
         order_expr, order_dir = _parse_order_by(order_by, agg_expr)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         payload = build_aggregate_query_payload(
             "traces",
             s,
@@ -1863,7 +1937,7 @@ def metrics_query(
     """
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         if temporality is None:
             temporality = "Cumulative" if time_aggregation in ("rate", "sum") else "Unspecified"
         group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
@@ -1908,7 +1982,7 @@ def promql_query(
     """
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         resp = client.query_promql(query, s, e, step=step)
         _warn_v5(resp)
         emit(_unwrap_time_series(resp), fmt,
@@ -1939,7 +2013,7 @@ def sql_query(
     """
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         resp = client.query_sql(query, s, e)
         emit(_unwrap_v5(resp), fmt)
     except Exception as ex:
@@ -1973,7 +2047,7 @@ def traces_detail(
     """
     try:
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="6h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         data = client.get_trace_detail(trace_id, s, e)
         if fmt == "table":
             spans = (data.get("data") or {}).get("spans") or []
@@ -2167,7 +2241,7 @@ def alerts_test(endpoint: str | None, token: str | None, fmt: str,
     try:
         rule = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
-        s, e = resolve_timestamps(start, end, time_range, default_range="1h")
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         rule = dict(rule)
         rule.setdefault("start", s)
         rule.setdefault("end", e)

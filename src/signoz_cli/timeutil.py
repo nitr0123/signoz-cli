@@ -25,10 +25,11 @@ def resolve_timestamps(
     time_range: str | None,
     default_range: str = "6h",
     unit: str = "ms",
+    profile_time_range: str | None = None,
 ) -> tuple[int, int]:
     """Return (start, end) from explicit timestamps or a time range string.
 
-    Priority: explicit start/end > time_range > default_range.
+    Priority: explicit start/end > time_range > profile default > command default.
     ``unit`` selects the output unit: 'ms' (most APIs) or 'ns' (legacy service APIs).
 
     A lone ``start`` or ``end`` is honoured rather than silently dropped: given
@@ -42,7 +43,8 @@ def resolve_timestamps(
     if start is not None and end is not None:
         return start, end
 
-    duration = parse_time_range(time_range) if time_range else parse_time_range(default_range)
+    effective_default = profile_time_range if profile_time_range else default_range
+    duration = parse_time_range(time_range) if time_range else parse_time_range(effective_default)
     duration_val = duration * factor
 
     if start is not None:
