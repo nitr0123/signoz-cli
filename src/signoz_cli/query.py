@@ -263,6 +263,63 @@ def build_metrics_query_payload(
     }
 
 
+def build_metrics_stats_payload(
+    start: int,
+    end: int,
+    metric_name: str,
+    temporality: str = "Unspecified",
+    time_aggregation: str = "max",
+    reduce_to: str = "max",
+    group_by: list[str] | None = None,
+    filter_expression: str = "",
+    step_interval: int = 300,
+) -> dict[str, Any]:
+    """Scalar stats payload — reduces a metric to a single value per group.
+
+    Uses ``requestType: "scalar"`` with ``reduceTo`` to collapse a time series
+    into a single number per group-by combination.  Supported ``reduce_to``
+    values: sum, count, avg, min, max, last, median.
+
+    Supported ``time_aggregation`` values depend on the metric type:
+    - Gauge metrics: avg, sum, min, max, count, rate, increase, p50, p75, p90, p95, p99
+    - Histogram metrics: sum, count, min, max, avg, p50, p75, p90, p95, p99
+    """
+    return {
+        "schemaVersion": "v1",
+        "start": start,
+        "end": end,
+        "requestType": "scalar",
+        "compositeQuery": {
+            "queries": [
+                {
+                    "type": "builder_query",
+                    "spec": {
+                        "name": "A",
+                        "signal": "metrics",
+                        "stepInterval": step_interval,
+                        "disabled": False,
+                        "aggregations": [
+                            {
+                                "metricName": metric_name,
+                                "temporality": temporality,
+                                "timeAggregation": time_aggregation,
+                                "spaceAggregation": time_aggregation,
+                                "reduceTo": reduce_to,
+                            }
+                        ],
+                        "filter": {"expression": filter_expression},
+                        "groupBy": [
+                            {"name": g, "signal": "metrics"} for g in (group_by or [])
+                        ],
+                    },
+                }
+            ]
+        },
+        "formatOptions": {"formatTableResultForUI": False, "fillGaps": False},
+        "variables": {},
+    }
+
+
 def build_promql_query_payload(
     start: int,
     end: int,
