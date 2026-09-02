@@ -2064,7 +2064,6 @@ def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
         columns = result.get("columns", [])
         data_rows = result.get("data", [])
         group_cols = [c["name"] for c in columns if c.get("columnType") == "group"]
-        agg_cols = [c["name"] for c in columns if c.get("columnType") == "aggregation"]
         # Use a readable label instead of __result_N
         agg_label = "value"
         for row in data_rows:

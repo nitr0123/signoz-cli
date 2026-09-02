@@ -16,7 +16,6 @@ from signoz_cli.output import (
     emit,
     set_custom_columns,
     set_field_selector,
-    set_jsonpath,
     set_sort_by,
 )
 
