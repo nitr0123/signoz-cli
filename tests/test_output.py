@@ -4,7 +4,21 @@ import json
 
 from rich.console import Console
 
-from signoz_cli.output import _dict_list_table, _flatten, _trunc, emit
+from signoz_cli.output import (
+    _apply_field_selector,
+    _dict_list_table,
+    _flatten,
+    _jsonpath_extract,
+    _sort_rows,
+    _to_csv,
+    _to_yaml,
+    _trunc,
+    emit,
+    set_custom_columns,
+    set_field_selector,
+    set_jsonpath,
+    set_sort_by,
+)
 
 
 class TestEmit:
@@ -74,3 +88,159 @@ class TestHelpers:
         _dict_list_table(console, rows)
         out = buf_out.getvalue()
         assert "a" in out and "b" in out
+
+
+class TestSortBy:
+    def test_sort_ascending(self):
+        data = [{"n": 3}, {"n": 1}, {"n": 2}]
+        set_sort_by("n")
+        result = _sort_rows(data)
+        assert [r["n"] for r in result] == [1, 2, 3]
+        set_sort_by(None)
+
+    def test_sort_descending(self):
+        data = [{"n": 3}, {"n": 1}, {"n": 2}]
+        set_sort_by("n", reverse=True)
+        result = _sort_rows(data)
+        assert [r["n"] for r in result] == [3, 2, 1]
+        set_sort_by(None)
+
+    def test_sort_by_string(self):
+        data = [{"name": "c"}, {"name": "a"}, {"name": "b"}]
+        set_sort_by("name")
+        result = _sort_rows(data)
+        assert [r["name"] for r in result] == ["a", "b", "c"]
+        set_sort_by(None)
+
+    def test_sort_missing_key(self):
+        data = [{"n": 1}, {}, {"n": 2}]
+        set_sort_by("n")
+        result = _sort_rows(data)
+        assert len(result) == 3
+        set_sort_by(None)
+
+    def test_sort_literal_dot_key(self):
+        data = [{"service.name": "b"}, {"service.name": "a"}]
+        set_sort_by("service.name")
+        result = _sort_rows(data)
+        assert [r["service.name"] for r in result] == ["a", "b"]
+        set_sort_by(None)
+
+
+class TestFieldSelector:
+    def test_filter_eq(self):
+        data = [{"s": "a", "v": 1}, {"s": "b", "v": 2}, {"s": "a", "v": 3}]
+        set_field_selector("s=a")
+        result = _apply_field_selector(data)
+        assert len(result) == 2
+        assert all(r["s"] == "a" for r in result)
+        set_field_selector(None)
+
+    def test_filter_no_match(self):
+        data = [{"s": "a"}]
+        set_field_selector("s=x")
+        assert _apply_field_selector(data) == []
+        set_field_selector(None)
+
+    def test_filter_literal_dot_key(self):
+        data = [{"service.name": "svc-a"}, {"service.name": "svc-b"}]
+        set_field_selector("service.name=svc-a")
+        result = _apply_field_selector(data)
+        assert len(result) == 1
+        set_field_selector(None)
+
+
+class TestJsonpath:
+    def test_root(self):
+        data = [{"a": 1}, {"a": 2}]
+        assert _jsonpath_extract(data, "$") == data
+
+    def test_array_index(self):
+        data = [{"a": 1}, {"a": 2}]
+        assert _jsonpath_extract(data, "$[0]") == {"a": 1}
+        assert _jsonpath_extract(data, "$[1]") == {"a": 2}
+
+    def test_map_field(self):
+        data = [{"name": "a"}, {"name": "b"}]
+        assert _jsonpath_extract(data, "$[*].name") == ["a", "b"]
+
+    def test_map_nested_field(self):
+        data = [{"svc": {"name": "a"}}, {"svc": {"name": "b"}}]
+        assert _jsonpath_extract(data, "$[*].svc.name") == ["a", "b"]
+
+    def test_top_level_field(self):
+        data = {"items": [{"x": 1}]}
+        assert _jsonpath_extract(data, "$.items") == [{"x": 1}]
+
+    def test_missing_field(self):
+        data = [{"a": 1}]
+        assert _jsonpath_extract(data, "$[*].b") == [None]
+
+
+class TestYaml:
+    def test_yaml_list(self):
+        out = _to_yaml([{"a": 1}, {"a": 2}])
+        assert "- a: 1" in out
+        assert "- a: 2" in out
+
+    def test_yaml_dict(self):
+        out = _to_yaml({"key": "value"})
+        assert "key: value" in out
+
+
+class TestCsv:
+    def test_csv_rows(self):
+        out = _to_csv([{"a": "1", "b": "2"}, {"a": "3", "b": "4"}])
+        lines = out.strip().split("\n")
+        assert lines[0] == "a,b"
+        assert lines[1] == "1,2"
+
+    def test_csv_empty(self):
+        out = _to_csv([])
+        assert out.strip() == ""
+
+
+class TestCustomColumns:
+    def test_custom_columns_renames_keys(self, capsys):
+        data = [{"service.name": "svc-a", "name": "op1", "extra": "x"}]
+        set_custom_columns(["svc:service.name", "op:name"])
+        emit(data, "json")
+        result = json.loads(capsys.readouterr().out)
+        assert result == [{"svc": "svc-a", "op": "op1"}]
+        set_custom_columns(None)
+
+    def test_custom_columns_bare_field(self, capsys):
+        data = [{"name": "a", "value": 1}]
+        set_custom_columns(["name"])
+        emit(data, "json")
+        result = json.loads(capsys.readouterr().out)
+        assert result == [{"name": "a"}]
+        set_custom_columns(None)
+
+    def test_custom_columns_table(self, capsys):
+        data = [{"service.name": "svc-a", "name": "op1"}]
+        set_custom_columns(["svc:service.name", "op:name"])
+        emit(data, "table")
+        out = capsys.readouterr().out
+        assert "svc" in out and "op" in out
+        assert "svc-a" in out
+        set_custom_columns(None)
+
+    def test_custom_columns_csv(self, capsys):
+        data = [{"service.name": "svc-a", "name": "op1", "extra": "x"}]
+        set_custom_columns(["svc:service.name", "op:name"])
+        emit(data, "csv")
+        out = capsys.readouterr().out
+        lines = out.strip().split("\n")
+        assert lines[0] == "svc,op"
+        assert lines[1] == "svc-a,op1"
+        set_custom_columns(None)
+
+
+class TestWide:
+    def test_wide_no_truncation(self, capsys):
+        long_val = "x" * 200
+        data = [{"name": long_val}]
+        emit(data, "wide")
+        out = capsys.readouterr().out
+        assert long_val in out

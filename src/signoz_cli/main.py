@@ -25,7 +25,18 @@ from signoz_cli.config import (
     save_config,
     select_profile_name,
 )
-from signoz_cli.output import emit, set_no_color, set_no_pager, set_output_file
+from signoz_cli.output import (
+    emit,
+    set_custom_columns,
+    set_field_selector,
+    set_jsonpath,
+    set_no_color,
+    set_no_headers,
+    set_no_pager,
+    set_output_file,
+    set_sort_by,
+    set_wide,
+)
 from signoz_cli.query import (
     build_aggregate_query_payload,
     build_logs_query_payload,
@@ -273,106 +284,114 @@ def _set_output_file(ctx: click.Context, param: click.Parameter, value: str | No
     set_output_file(value)
 
 
+def _set_output_mode(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> None:
+    """Eager callback: parse -o value as format mode or file path."""
+    if value is None:
+        return
+    known_formats = {"json", "yaml", "csv", "table", "wide"}
+    if value in known_formats:
+        if value in ("json", "yaml", "csv"):
+            ctx.params["fmt"] = value
+        elif value == "wide":
+            set_wide(True)
+            ctx.params["fmt"] = "wide"
+        return
+    # custom-columns=NAME:.field,...
+    if value.startswith("custom-columns="):
+        spec = value[len("custom-columns="):]
+        cols = [c.strip() for c in spec.split(",") if c.strip()]
+        set_custom_columns(cols)
+        return
+    # jsonpath='{.items[*].name}'
+    if value.startswith("jsonpath="):
+        set_jsonpath(value[len("jsonpath="):])
+        return
+    # Otherwise treat as file path
+    set_output_file(value)
+
+
 def _common_options(f):
-    """Decorate a command with --endpoint / --token / --profile / --format / --json."""
+    """Decorate a command with --endpoint / --token / --profile / --format / output controls."""
     f = click.option(
-        "-o",
-        "--output",
-        type=click.Path(dir_okay=False, writable=True),
-        default=None,
-        expose_value=False,
-        is_eager=True,
-        callback=_set_output_file,
-        help="Write output to a file instead of stdout.",
+        "-o", "--output", "output_mode",
+        default=None, expose_value=False, is_eager=True,
+        callback=_set_output_mode,
+        help="Output: json|yaml|csv|table|wide, custom-columns=COL:FIELD,..., "
+        "jsonpath='{.path}', or a file path.",
     )(f)
     f = click.option(
-        "--endpoint",
-        default=None,
+        "--endpoint", default=None,
         help="SigNoz instance URL (env: SIGNOZ_ENDPOINT). Overrides the profile.",
     )(f)
     f = click.option(
-        "--token",
-        default=None,
-        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN). Overrides the profile. "
-        "Prefer env vars or profiles over flags to keep tokens out of shell history.",
+        "--token", default=None,
+        help="SigNoz API key (env: SIGNOZ_ACCESS_TOKEN). Overrides the profile.",
     )(f)
     f = click.option(
-        "-p",
-        "--profile",
-        default=None,
+        "-p", "--profile", default=None,
         help="Named connection profile from ~/.signoz/config.json "
         "(env: SIGNOZ_PROFILE; falls back to the default profile).",
     )(f)
     f = click.option(
-        "-f",
-        "--format",
-        "fmt",
+        "-f", "--format", "fmt",
         type=click.Choice(["json", "table", "csv"]),
-        default="table",
-        show_default="table",
+        default="table", show_default="table",
         callback=_resolve_format_callback,
         help="Output format (default: SIGNOZ_FORMAT or profile `default_format`, else table).",
     )(f)
     f = click.option(
-        "--json",
-        is_flag=True,
-        expose_value=False,
-        is_eager=True,
+        "--json", is_flag=True, expose_value=False, is_eager=True,
         callback=_set_json_flag,
         help="Shorthand for -f json.",
     )(f)
     f = click.option(
-        "--csv",
-        is_flag=True,
-        expose_value=False,
-        is_eager=True,
+        "--csv", is_flag=True, expose_value=False, is_eager=True,
         callback=lambda ctx, param, value: ctx.params.update({"fmt": "csv"}) if value else None,
         help="Shorthand for -f csv.",
     )(f)
     f = click.option(
-        "--timeout",
-        type=float,
-        default=None,
-        expose_value=False,
-        is_eager=True,
+        "--timeout", type=float, default=None, expose_value=False, is_eager=True,
         callback=_set_timeout,
         help="Request timeout in seconds (env: SIGNOZ_TIMEOUT, default 120).",
     )(f)
     f = click.option(
-        "--insecure",
-        is_flag=True,
-        default=None,
-        expose_value=False,
-        is_eager=True,
+        "--insecure", is_flag=True, default=None, expose_value=False, is_eager=True,
         callback=_set_insecure,
         help="Skip TLS certificate verification (env: SIGNOZ_INSECURE=1).",
     )(f)
     f = click.option(
-        "--no-color",
-        is_flag=True,
-        default=None,
-        expose_value=False,
-        is_eager=True,
+        "--no-color", is_flag=True, default=None, expose_value=False, is_eager=True,
         callback=_set_no_color,
         help="Disable ANSI colors in table output.",
     )(f)
     f = click.option(
-        "--no-input",
-        is_flag=True,
-        default=None,
-        expose_value=False,
-        is_eager=True,
+        "--no-input", is_flag=True, default=None, expose_value=False, is_eager=True,
         callback=_set_no_input,
         help="Never prompt; fail instead of asking for confirmation.",
     )(f)
     f = click.option(
-        "--no-pager",
-        is_flag=True,
-        default=None,
-        expose_value=False,
-        is_eager=True,
+        "--no-pager", is_flag=True, default=None, expose_value=False, is_eager=True,
         callback=_set_no_pager,
         help="Disable pager for table output (env: NO_PAGER=1).",
+    )(f)
+    f = click.option(
+        "--sort-by", default=None, expose_value=False,
+        callback=lambda ctx, param, value: set_sort_by(
+            value.lstrip("-"), reverse=value.startswith("-")
+        ) if value else None,
+        help="Sort output by a field (e.g. --sort-by=durationNano, --sort-by=-value for desc).",
+    )(f)
+    f = click.option(
+        "--field-selector", "field_sel", default=None, expose_value=False,
+        callback=lambda ctx, param, value: set_field_selector(value),
+        help="Filter by field value (e.g. --field-selector severity=ERROR,hasError=true).",
+    )(f)
+    f = click.option(
+        "--no-headers", is_flag=True, default=None, expose_value=False,
+        callback=lambda ctx, param, value: set_no_headers(value) if value else None,
+        help="Suppress table headers (for awk/cut pipelines).",
     )(f)
     return f
 
@@ -1845,10 +1864,12 @@ def status_cmd(endpoint: str | None, token: str | None, fmt: str,
 
 @cli.command("query")
 @_common_options
-@click.argument("json_file", type=click.Path())
+@click.argument("json_file", type=click.Path(), required=False, default=None)
 def query_raw(endpoint: str | None, token: str | None, fmt: str,
-    profile: str | None, json_file: str) -> None:
+    profile: str | None, json_file: str | None) -> None:
     """Execute a raw Query Builder v5 query from a JSON file."""
+    if not json_file:
+        raise click.UsageError("JSON_FILE is required (or use --generate-cli-skeleton).")
     try:
         payload = _read_json(json_file)
         client = _get_client(endpoint, token, profile)
@@ -1856,7 +1877,6 @@ def query_raw(endpoint: str | None, token: str | None, fmt: str,
         emit(data, fmt)
     except Exception as e:
         _handle_error(e)
-
 
 
 # ===================================================================
@@ -2942,6 +2962,349 @@ def _pagination_meta(total: int, offset: int, limit: int) -> dict[str, Any]:
         "nextOffset": offset + limit if offset + limit < total else None,
     }
 
+
+# ===================================================================
+# EXPLAIN — built-in docs for query syntax
+# ===================================================================
+
+@cli.command("explain")
+@click.argument("topic", default="overview")
+def explain(topic: str) -> None:
+    """Explain query syntax, filters, and available signals.
+
+    Topics: overview, filters, aggregations, metrics, logs, traces.
+
+    Examples:
+
+      signoz explain
+
+      signoz explain filters
+
+      signoz explain aggregations
+    """
+    topics = {
+        "overview": """SigNoz CLI Query Reference
+=========================
+
+FILTER SYNTAX (used in --query, --filter)
+  field="value"           Exact match
+  field!="value"          Not equal
+  field=~"regex"          Regex match
+  field!~"regex"          Negated regex
+  field in ["a","b"]      Set membership
+  field>100               Numeric comparison
+  field>=100              Greater than or equal
+  AND / OR                Logical operators
+  (expr)                  Grouping
+
+  Examples:
+    severity="ERROR"
+    severity="ERROR" AND service.name="api-server"
+    message=~"timeout|deadline"
+    durationNano>1000000000
+
+AGGREGATIONS
+  --time-aggregation:   avg, sum, min, max, count, rate, increase,
+                        p50, p75, p90, p95, p99
+  --space-aggregation:  sum, avg, min, max, count
+  --reduce-to:         sum, count, avg, min, max, last, median
+
+SIGNALS (Query Builder v5)
+  logs      — log lines (message, severity, service.name, timestamp)
+  traces    — distributed trace spans (name, durationNano, hasError)
+  metrics   — time-series metrics (container_*, http_*, etc.)
+
+TIME RANGES
+  30m, 1h, 2h, 6h, 12h, 24h, 2d, 7d, 30d
+  Or explicit --start/--end in milliseconds.
+""",
+        "filters": """FILTER EXPRESSIONS
+==================
+
+Basic operators:
+  field="value"       Exact match
+  field!="value"      Not equal
+  field=~"regex"      Regex match (RE2 syntax)
+  field!~"regex"      Negated regex
+
+Comparison operators:
+  field>number        Greater than
+  field>=number       Greater than or equal
+  field<number        Less than
+  field<=number       Less than or equal
+
+Logical operators:
+  expr AND expr       Both conditions must be true
+  expr OR expr        Either condition can be true
+  (expr)              Grouping
+
+Common fields:
+  severity            Log level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)
+  message             Log message text
+  service.name        Service identifier
+  hasError            true/false (traces)
+  durationNano        Span duration in nanoseconds
+  traceID             Distributed trace identifier
+  spanID              Span identifier
+
+Examples:
+  severity="ERROR"
+  severity="ERROR" AND service.name="api-server"
+  message=~"connection refused|timeout"
+  durationNano>100000000 AND hasError=true
+  severity IN ["ERROR","WARN"] AND service.name=~"payment"
+""",
+        "aggregations": """AGGREGATION REFERENCE
+=====================
+
+Time aggregations (--time-aggregation):
+  avg       Arithmetic mean over the time window
+  sum       Sum of all values
+  min       Minimum value
+  max       Maximum value
+  count     Number of data points
+  rate      Per-second rate of increase (counters)
+  increase  Total increase over the window (counters)
+  p50       50th percentile (median)
+  p75       75th percentile
+  p90       90th percentile
+  p95       95th percentile
+  p99       99th percentile
+
+Space aggregations (--space-aggregation):
+  sum       Sum across all dimension combinations
+  avg       Average across dimensions
+  min       Minimum across dimensions
+  max       Maximum across dimensions
+  count     Count of dimension combinations
+
+Reduce to (--reduce-to, for metrics stats):
+  sum       Sum of the reduced time series
+  count     Count of data points
+  avg       Average of the time series
+  min       Minimum of the time series
+  max       Maximum of the time series
+  last      Last value in the time series
+  median    Median of the time series
+
+Metric temporality (--temporality):
+  Unspecified  Default for gauge metrics
+  Cumulative   Default for sum/counter metrics
+  Delta        For delta counters
+""",
+        "metrics": """METRICS QUERIES
+===============
+
+List metric keys:
+  signoz metrics list-keys
+  signoz metrics search "container"
+
+Get field info:
+  signoz metrics fields
+  signoz metrics field-values k8s.pod.name
+
+Query time series:
+  signoz metrics query container_memory_working_set_bytes \\
+    --time-aggregation max --group-by k8s.pod.name
+
+Summary stats (single value per group):
+  signoz metrics stats container_memory_working_set_bytes \\
+    --group-by k8s.pod.name --time-range 7d
+
+PromQL:
+  signoz promql 'rate(http_requests_total[5m])'
+
+Raw Query Builder v5:
+  signoz query payload.json
+""",
+        "logs": """LOGS QUERIES
+============
+
+Search logs:
+  signoz logs search --service api-server --severity ERROR --time-range 1h
+  signoz logs search --query 'message=~"timeout"' --time-range 24h
+
+Error logs:
+  signoz logs errors --service api-server --time-range 6h
+
+Aggregate logs:
+  signoz logs aggregate --aggregation count --group-by severity
+
+Log fields:
+  signoz logs fields
+  signoz logs field-values severity --time-range 1h
+
+Tail live logs:
+  signoz logs tail --service api-server
+
+By service:
+  signoz logs by-service api-server --time-range 1h
+
+Common fields:
+  message, severity, service.name, timestamp, traceID
+""",
+        "traces": """TRACES QUERIES
+==============
+
+Search traces:
+  signoz traces search --service api-server --time-range 1h
+  signoz traces search --query 'durationNano>100000000' --time-range 6h
+
+Error traces:
+  signoz traces errors --service api-server --time-range 1h
+
+Trace detail:
+  signoz traces detail <traceID>
+
+By service:
+  signoz traces by-service api-server --time-range 1h
+
+Top operations:
+  signoz services top-operations api-server
+
+Trace fields:
+  signoz traces fields
+  signoz traces field-values "service.name" --time-range 1h
+
+Common fields:
+  name, durationNano, hasError, traceID, spanID, service.name
+""",
+    }
+
+    content = topics.get(topic)
+    if content is None:
+        available = ", ".join(sorted(topics.keys()))
+        raise click.UsageError(
+            f"Unknown topic '{topic}'. Available: {available}"
+        )
+    click.echo(content)
+
+
+# ===================================================================
+# SKELETON — example payloads for query / sql
+# ===================================================================
+
+def _add_skeleton_option(cmd: click.Command) -> click.Command:
+    """Add --generate-cli-skeleton to a command."""
+    cmd.params.append(
+        click.Option(
+            ["--generate-cli-skeleton"],
+            is_flag=True,
+            expose_value=False,
+            is_eager=True,
+            callback=_skeleton_callback,
+            help="Print an example payload for this command and exit.",
+        )
+    )
+    return cmd
+
+
+def _skeleton_callback(
+    ctx: click.Context, param: click.Parameter, value: bool
+) -> None:
+    if not value:
+        return
+    import json as _json
+    cmd_name = ctx.command.name
+    skeleton: dict[str, Any] = {}
+    if cmd_name == "query":
+        skeleton = {
+            "schemaVersion": "v1",
+            "start": 0,
+            "end": 0,
+            "requestType": "time_series",
+            "compositeQuery": {
+                "queries": [
+                    {
+                        "type": "builder_query",
+                        "spec": {
+                            "name": "A",
+                            "signal": "logs",
+                            "stepInterval": 60,
+                            "disabled": False,
+                            "aggregations": [
+                                {
+                                    "metricName": "",
+                                    "temporality": "Unspecified",
+                                    "timeAggregation": "count",
+                                    "spaceAggregation": "sum",
+                                }
+                            ],
+                            "filter": {"expression": 'severity="ERROR"'},
+                            "groupBy": [
+                                {"name": "service.name", "signal": "logs"}
+                            ],
+                        },
+                    }
+                ]
+            },
+            "formatOptions": {
+                "formatTableResultForUI": False,
+                "fillGaps": False,
+            },
+            "variables": {},
+        }
+    elif cmd_name == "sql":
+        skeleton = {
+            "query": (
+                "SELECT service.name, count(*) as cnt "
+                "FROM signoz_logs.distributed_logs "
+                "WHERE timestamp > now() - INTERVAL 1 HOUR "
+                "GROUP BY service.name "
+                "ORDER BY cnt DESC "
+                "LIMIT 10"
+            )
+        }
+    else:
+        skeleton = {"_note": f"No skeleton template for command '{cmd_name}'."}
+
+    click.echo(_json.dumps(skeleton, indent=2))
+    ctx.exit()
+
+
+# ===================================================================
+# WATCH MODE — live tail
+# ===================================================================
+
+def _watch_loop(
+    fetch_fn: Any,
+    fmt: str,
+    interval: float = 2.0,
+    table_keys: list[str] | None = None,
+    wide_keys: list[str] | None = None,
+) -> None:
+    """Poll fetch_fn() every *interval* seconds and emit new rows.
+
+    The fetch_fn must return a list of dicts.  Each row is expected to have
+    a unique identifier (traceID or a combination of timestamp+service.name)
+    so we can deduplicate.
+    """
+    import time
+
+    seen: set[str] = set()
+    click.echo("# Watching... (Ctrl+C to stop)", err=True)
+    try:
+        while True:
+            rows = fetch_fn()
+            if isinstance(rows, list):
+                new_rows = []
+                for row in rows:
+                    rid = json.dumps(
+                        {k: row.get(k) for k in ("traceID", "timestamp", "message", "name") if k in row},
+                        sort_keys=True, default=str,
+                    )
+                    if rid not in seen:
+                        seen.add(rid)
+                        new_rows.append(row)
+                if new_rows:
+                    emit(new_rows, fmt, table_keys=table_keys, wide_keys=wide_keys)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("\n# Stopped.", err=True)
+
+
+# Wire skeleton option to query command
+_add_skeleton_option(query_raw)
 
 if __name__ == "__main__":
     cli()
