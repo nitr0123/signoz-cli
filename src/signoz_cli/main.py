@@ -30,6 +30,7 @@ from signoz_cli.query import (
     build_aggregate_query_payload,
     build_logs_query_payload,
     build_metrics_query_payload,
+    build_metrics_stats_payload,
     build_traces_query_payload,
 )
 from signoz_cli.timeutil import parse_time_range, resolve_timestamps
@@ -1958,6 +1959,105 @@ def metrics_query(
              table_keys=["series", "timestamp", "value"])
     except Exception as ex:
         _handle_error(ex)
+
+
+@metrics.command("stats")
+@_common_options
+@click.argument("metric_name")
+@click.option("--time-aggregation", default="max", show_default=True,
+              type=click.Choice(["avg", "sum", "min", "max", "count", "rate",
+                                 "increase", "p50", "p75", "p90", "p95", "p99"]),
+              help="Temporal aggregation per step.")
+@click.option("--reduce-to", default="max", show_default=True,
+              type=click.Choice(["sum", "count", "avg", "min", "max", "last", "median"]),
+              help="How to collapse the time series into a single value.")
+@click.option("--temporality", default=None,
+              type=click.Choice(["Unspecified", "Delta", "Cumulative"]),
+              help="Metric temporality. Defaults: Gauge=Unspecified, Sum=Cumulative.")
+@click.option("--group-by", default=None,
+              help="Comma-separated attribute keys to group by (e.g. k8s.pod.name).")
+@click.option("--filter", "filter_expr", default="", help="Filter expression.")
+@click.option("--step", type=int, default=300, show_default=True,
+              help="Step interval in seconds (300 = 5min).")
+@_time_options(default_range="24h")
+def metrics_stats(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    metric_name: str,
+    time_aggregation: str,
+    reduce_to: str,
+    temporality: str | None,
+    group_by: str | None,
+    filter_expr: str,
+    step: int,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Compute summary statistics for a metric (p95/max/avg over a window).
+
+    Uses Query Builder v5 ``scalar`` mode with ``reduceTo`` to collapse a time
+    series into a single value per group-by combination.
+
+    Examples:
+
+      signoz metrics stats container_memory_working_set_bytes --group-by k8s.pod.name
+
+      signoz metrics stats http_request_duration --time-aggregation p95 --reduce-to max --time-range 7d
+
+      signoz metrics stats cpu_usage --time-aggregation avg --reduce-to avg --group-by host.name
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h",
+                                  profile_time_range=_profile_time_range(profile))
+        if temporality is None:
+            temporality = "Cumulative" if time_aggregation in ("rate", "sum") else "Unspecified"
+        group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
+        payload = build_metrics_stats_payload(
+            s, e, metric_name,
+            temporality=temporality,
+            time_aggregation=time_aggregation,
+            reduce_to=reduce_to,
+            group_by=group_by_fields,
+            filter_expression=filter_expr,
+            step_interval=step,
+        )
+        resp = client.query_builder_v5(payload)
+        _warn_v5(resp)
+        _emit_scalar_stats(resp, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
+    """Unwrap a scalar Query Builder v5 response into a flat table."""
+    try:
+        results = data["data"]["data"]["results"]
+    except (KeyError, TypeError, IndexError, AttributeError):
+        emit(data, fmt)
+        return
+    rows: list[dict[str, Any]] = []
+    for result in results or []:
+        columns = result.get("columns", [])
+        data_rows = result.get("data", [])
+        group_cols = [c["name"] for c in columns if c.get("columnType") == "group"]
+        agg_cols = [c["name"] for c in columns if c.get("columnType") == "aggregation"]
+        # Use a readable label instead of __result_N
+        agg_label = "value"
+        for row in data_rows:
+            r: dict[str, Any] = {}
+            for i, col_name in enumerate(group_cols):
+                r[col_name] = row[i] if i < len(row) else ""
+            val = row[len(group_cols)] if len(group_cols) < len(row) else None
+            r[agg_label] = val
+            rows.append(r)
+    if not rows:
+        emit("(no results)", fmt)
+        return
+    emit(rows, fmt)
 
 
 @cli.command("promql")
