@@ -1,11 +1,15 @@
 name: Bump version
 
 # Merge to main -> semver patch bump -> push tag -> triggers Release workflow.
-# The bump commit carries [skip ci] so Forgejo (SKIP_WORKFLOW_STRINGS) starts
-# no new workflow for it -- this avoids the self-cancel loop described in
-# https://forgejo.org/docs/latest/user/actions/reference/ (concurrency) and
-# Codeberg actions/meta#65. cancel-in-progress: false guarantees the bump
-# itself is never superseded mid-flight.
+#
+# Deliberately NO [skip ci] in the bump commit: Forgejo applies
+# SKIP_WORKFLOW_STRINGS to the tagged commit too, so a skip marker would
+# suppress the tag-triggered Release run as well (observed: v0.5.2 tag
+# created zero runs). Loop protection comes from the "Skip if version
+# bump commit" step below (git log guard) instead: a bump commit triggers
+# one extra CI + bump run, both of which no-op and terminate.
+# cancel-in-progress: false guarantees the bump itself is never
+# superseded mid-flight (see Forgejo Actions reference on concurrency).
 on:
   push:
     branches: [main]
@@ -28,7 +32,7 @@ jobs:
         run: |
           MSG=$(git log -1 --pretty=%s)
           echo "Commit message: $MSG"
-          if echo "$MSG" | grep -qE '\[skip ci\]|^chore: bump version'; then
+          if echo "$MSG" | grep -qE '^chore: bump version'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -67,8 +71,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Version files already at $NEXT_NUM, skipping commit."
           else
-            # [skip ci] prevents this push from triggering (and cancelling) workflows.
-            git commit -m "chore: bump version to $NEXT [skip ci]"
+            git commit -m "chore: bump version to $NEXT"
             git push
           fi
           if git rev-parse "$NEXT" >/dev/null 2>&1; then
