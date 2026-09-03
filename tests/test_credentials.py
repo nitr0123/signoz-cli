@@ -83,15 +83,15 @@ class TestResolveCredentials:
 
 class TestRootProfileFlag:
     def test_root_flag_beats_env_selection(self, multi_config, monkeypatch):
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
         monkeypatch.setenv("SIGNOZ_PROFILE", "prod")
-        monkeypatch.setattr(m, "_ROOT_PROFILE", "local")
+        monkeypatch.setattr(cm, "_ROOT_PROFILE", "local")
         ep, tok = _resolve_credentials(None, None, None)
         assert (ep, tok) == ("http://local:8080", "tok-local")
 
     def test_leaf_flag_beats_root_flag(self, multi_config, monkeypatch):
-        import signoz_cli.main as m
-        monkeypatch.setattr(m, "_ROOT_PROFILE", "local")
+        import signoz_cli.commands.common as cm
+        monkeypatch.setattr(cm, "_ROOT_PROFILE", "local")
         ep, tok = _resolve_credentials(None, None, "prod")
         assert (ep, tok) == ("https://prod:443", "tok-prod")
 
