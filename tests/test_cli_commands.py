@@ -5,7 +5,7 @@ import json
 import pytest
 from click.testing import CliRunner
 
-import signoz_cli.main as m
+import signoz_cli.commands.common as cm
 from signoz_cli.client import SigNozApiError
 from signoz_cli.main import cli
 
@@ -27,7 +27,7 @@ def runner():
 
 
 def _install_client(monkeypatch, **behaviour):
-    """Patch main.SigNozClient with a fake whose methods return canned values.
+    """Patch the client constructor where it is looked up (commands.common).
 
     ``behaviour`` maps method name -> value (or an Exception instance to raise).
     """
@@ -47,7 +47,7 @@ def _install_client(monkeypatch, **behaviour):
             return _method
         setattr(Fake, name, _make(value))
 
-    monkeypatch.setattr(m, "SigNozClient", Fake)
+    monkeypatch.setattr(cm, "SigNozClient", Fake)
     return Fake
 
 

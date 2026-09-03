@@ -165,6 +165,7 @@ class TestWhoami:
 
 class TestAuthVerifyProfile:
     def test_verify_uses_selected_leaf_profile(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
         # Two profiles with distinct endpoints; `auth verify -p b` must connect
         # to b's endpoint. Before the fix, the leaf --profile was dropped and
         # the default (a) endpoint was used instead.
@@ -173,7 +174,6 @@ class TestAuthVerifyProfile:
         runner.invoke(cli, ["configure", "-p", "b",
                             "--endpoint", "http://b-endpoint:2", "--token", "tok-b-123456"])
 
-        import signoz_cli.main as m
         captured = {}
 
         class Recorder:
@@ -190,7 +190,7 @@ class TestAuthVerifyProfile:
             def get_server_version(self):
                 return {"version": "v0.138.0"}
 
-        monkeypatch.setattr(m, "SigNozClient", Recorder)
+        monkeypatch.setattr(cm, "SigNozClient", Recorder)
         result = runner.invoke(cli, ["auth", "verify", "-p", "b"])
         assert result.exit_code == 0, result.output
         assert captured["endpoint"] == "http://b-endpoint:2"
@@ -238,14 +238,14 @@ class TestTimeoutInsecure:
     @staticmethod
     def _capture_client(monkeypatch, env, holder_name, holder_value):
 
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
 
         for k, v in env.items():
             monkeypatch.setenv(k, v)
-        holder = getattr(m, holder_name)
+        holder = getattr(cm, holder_name)
         old = holder["value"]
         captured = {}
-        real = m.SigNozClient
+        real = cm.SigNozClient
 
         def recorder(endpoint, token, **kwargs):
             captured.update(kwargs)
@@ -254,12 +254,12 @@ class TestTimeoutInsecure:
 
         try:
             holder["value"] = holder_value
-            m.SigNozClient = recorder
-            m._get_client(None, None)
+            cm.SigNozClient = recorder
+            cm._get_client(None, None)
             return captured
         finally:
             holder["value"] = old
-            m.SigNozClient = real
+            cm.SigNozClient = real
 
     def test_env_timeout_used(self, runner, monkeypatch):
         captured = self._capture_client(
@@ -310,12 +310,12 @@ class TestFormatDefault:
         data = cfgmod.load_config()
         data["profiles"]["jsonp"]["default_format"] = "json"
         cfgmod.save_config(data)
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
         from signoz_cli.main import _resolve_format_callback
-        m._ROOT_PROFILE = "jsonp"
+        cm._ROOT_PROFILE = "jsonp"
         ctx = click.Context(click.Command("test"))
         assert _resolve_format_callback(ctx, None, "table") == "json"
-        m._ROOT_PROFILE = None  # reset
+        cm._ROOT_PROFILE = None  # reset
 
     def test_default_is_table_when_unset(self, runner):
         from signoz_cli.main import _resolve_format_callback
@@ -359,7 +359,7 @@ class TestCompletion:
 
 class TestStatus:
     def test_status_with_fake_client(self, runner, monkeypatch):
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
 
         class Fake:
             def __init__(self, endpoint, token, **kwargs):
@@ -374,7 +374,7 @@ class TestStatus:
             def get_server_version(self):
                 return {"version": "v0.138.0"}
 
-        monkeypatch.setattr(m, "SigNozClient", Fake)
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
         runner.invoke(cli, ["configure", "-p", "s", "--endpoint", "http://s:1",
                             "--token", "tok-1234567"])
         result = runner.invoke(cli, ["status", "-p", "s", "--json"])
@@ -411,7 +411,7 @@ class TestNoInput:
 
 class TestDryRun:
     def test_delete_dry_run_does_not_call_client(self, runner, monkeypatch):
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
 
         called = {"delete": False}
 
@@ -426,7 +426,7 @@ class TestDryRun:
                 called["delete"] = True
                 return {"status": "ok"}
 
-        monkeypatch.setattr(m, "SigNozClient", Fake)
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
         runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
                             "--token", "tok-1234567"])
         result = runner.invoke(cli, ["dashboards", "delete", "abc",
@@ -438,7 +438,7 @@ class TestDryRun:
 
 class TestStdin:
     def test_dashboards_create_from_stdin(self, runner, monkeypatch):
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
 
         created = {}
 
@@ -453,7 +453,7 @@ class TestStdin:
                 created["dash"] = dashboard
                 return {"status": "success", "data": {"id": "d1"}}
 
-        monkeypatch.setattr(m, "SigNozClient", Fake)
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
         runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
                             "--token", "tok-1234567"])
         payload = json.dumps({"name": "from-stdin", "schemaVersion": "v6", "spec": {}})
@@ -465,7 +465,7 @@ class TestStdin:
 
 class TestNoColor:
     def test_no_color_removes_ansi(self, runner, monkeypatch):
-        import signoz_cli.main as m
+        import signoz_cli.commands.common as cm
 
         class Fake:
             def __init__(self, *a, **k):
@@ -478,7 +478,7 @@ class TestNoColor:
                 return {"status": "success", "data": {"type": "raw", "data": {
                     "results": [{"queryName": "A", "rows": [{"data": {"body": "x"}}]}]}}}
 
-        monkeypatch.setattr(m, "SigNozClient", Fake)
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
         runner.invoke(cli, ["configure", "-p", "d", "--endpoint", "http://d:1",
                             "--token", "tok-1234567"])
         result = runner.invoke(cli, ["logs", "search", "--no-color", "-p", "d"])
