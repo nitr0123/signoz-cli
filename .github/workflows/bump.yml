@@ -1,0 +1,79 @@
+name: Bump version
+
+# Merge to main -> semver patch bump -> push tag -> triggers Release workflow.
+# The bump commit carries [skip ci] so Forgejo (SKIP_WORKFLOW_STRINGS) starts
+# no new workflow for it -- this avoids the self-cancel loop described in
+# https://forgejo.org/docs/latest/user/actions/reference/ (concurrency) and
+# Codeberg actions/meta#65. cancel-in-progress: false guarantees the bump
+# itself is never superseded mid-flight.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Semver patch bump + tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Skip if version bump commit
+        id: check
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          echo "Commit message: $MSG"
+          if echo "$MSG" | grep -qE '\[skip ci\]|^chore: bump version'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next semver patch
+        if: steps.check.outputs.skip != 'true'
+        id: version
+        run: |
+          # Latest tag by semver sort, fallback to v0.0.0
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          TAG_NUM="${LATEST#v}"
+          MAJOR=$(echo "$TAG_NUM" | cut -d. -f1)
+          MINOR=$(echo "$TAG_NUM" | cut -d. -f2)
+          PATCH=$(echo "$TAG_NUM" | cut -d. -f3)
+          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          NEXT_NUM="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "next_num=$NEXT_NUM" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $LATEST -> Next: $NEXT"
+
+      - name: Bump version, commit and tag
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          NEXT="${{ steps.version.outputs.next }}"
+          NEXT_NUM="${{ steps.version.outputs.next_num }}"
+          echo "Bumping to $NEXT"
+          sed -i "s/^version = .*/version = \"$NEXT_NUM\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$NEXT_NUM\"/" src/signoz_cli/__init__.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/signoz_cli/__init__.py
+          if git diff --cached --quiet; then
+            echo "Version files already at $NEXT_NUM, skipping commit."
+          else
+            # [skip ci] prevents this push from triggering (and cancelling) workflows.
+            git commit -m "chore: bump version to $NEXT [skip ci]"
+            git push
+          fi
+          if git rev-parse "$NEXT" >/dev/null 2>&1; then
+            echo "Tag $NEXT already exists, skipping tag creation."
+          else
+            git tag "$NEXT"
+            git push origin "$NEXT"
+          fi
