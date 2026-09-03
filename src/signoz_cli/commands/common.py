@@ -823,9 +823,9 @@ def _build_trace_filter(
 
 
 def _append_filter(existing: str, clause: str) -> str:
-    if existing:
+    if existing and clause:
         return f"{existing} AND {clause}"
-    return clause
+    return existing or clause
 
 
 def _parse_group_by(group_by: str | None, signal: str) -> list[dict[str, str]]:

@@ -1,0 +1,21 @@
+[
+  {
+    "serviceName": "signoz-cli-e2e",
+    "p99": 50192185.949999996,
+    "avgDuration": 50137943.5,
+    "numCalls": 6,
+    "callRate": 0.0002781641168289291,
+    "numErrors": 0,
+    "errorRate": 0,
+    "num4XX": 0,
+    "fourXXRate": 0,
+    "dataWarning": {
+      "topLevelOps": [
+        "overflow_operation",
+        "e2e-operation-fixture",
+        "e2e-operation-d48aa30ca8e2",
+        "e2e-operation-363527653b32"
+      ]
+    }
+  }
+]

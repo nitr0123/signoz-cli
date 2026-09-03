@@ -1,0 +1,25 @@
+{
+  "status": "success",
+  "data": {
+    "dashboards": [],
+    "total": 0,
+    "tags": [
+      {
+        "key": "env",
+        "value": "staging"
+      },
+      {
+        "key": "team",
+        "value": "cli"
+      }
+    ],
+    "reservedKeywords": [
+      "created_at",
+      "created_by",
+      "description",
+      "locked",
+      "name",
+      "updated_at"
+    ]
+  }
+}

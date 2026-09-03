@@ -6,8 +6,9 @@ freshly-ingested rows instead of whatever happens to be in the backend:
     python tests/seed_live_data.py --otlp-grpc localhost:4317 --run-id abc123
 
 Sends one trace (service ``signoz-cli-e2e``, operation
-``e2e-operation-<run-id>``) and one log record whose body embeds the run id,
-both tagged with ``e2e.run.id=<run-id>``. Exits 0 once the exporters flush.
+``e2e-operation-<run-id>``), one log record whose body embeds the run id,
+and a few points of the ``e2e.requests.total`` counter, all tagged with
+``e2e.run.id=<run-id>``. Exits 0 once the exporters flush.
 
 No global OpenTelemetry provider state is touched, so the function can be
 called repeatedly in one process (e.g. seeding both the v0.138 and the
@@ -21,6 +22,7 @@ import time
 
 SERVICE_NAME = "signoz-cli-e2e"
 OPERATION_PREFIX = "e2e-operation"
+METRIC_NAME = "e2e.requests.total"
 RUN_ATTR = "e2e.run.id"
 
 
@@ -33,7 +35,7 @@ def log_body(run_id: str) -> str:
 
 
 def seed(otlp_grpc: str, run_id: str) -> dict[str, str]:
-    """Export one span + one log record tagged with *run_id*."""
+    """Export one span + one log record + metric points tagged with *run_id*."""
     from opentelemetry._logs import SeverityNumber
     from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
         OTLPLogExporter,
@@ -83,7 +85,42 @@ def seed(otlp_grpc: str, run_id: str) -> dict[str, str]:
     log_provider.force_flush(timeout_millis=15_000)
     log_provider.shutdown()
 
+    _send_metric(otlp_grpc, resource, run_id)
+
     return {"trace_id": trace_id, "operation": op_name, "log_body": body}
+
+
+def send_metric(otlp_grpc: str, run_id: str, service: str = SERVICE_NAME) -> None:
+    """Export counter points only (used to top up metrics before recording)."""
+    from opentelemetry.sdk.resources import Resource
+
+    _send_metric(
+        otlp_grpc, Resource.create({"service.name": service}), run_id
+    )
+
+
+def _send_metric(otlp_grpc: str, resource, run_id: str) -> None:
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        OTLPMetricExporter,
+    )
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+    metric_reader = PeriodicExportingMetricReader(
+        OTLPMetricExporter(endpoint=f"http://{otlp_grpc}", insecure=True),
+        export_interval_millis=1_000,
+    )
+    meter_provider = MeterProvider(
+        resource=resource, metric_readers=[metric_reader]
+    )
+    counter = meter_provider.get_meter("signoz-cli-e2e-seeder").create_counter(
+        METRIC_NAME, description="e2e seeded requests",
+    )
+    for _ in range(10):
+        counter.add(1, {RUN_ATTR: run_id})
+        time.sleep(0.5)
+    meter_provider.force_flush(timeout_millis=15_000)
+    meter_provider.shutdown()
 
 
 def main() -> None:

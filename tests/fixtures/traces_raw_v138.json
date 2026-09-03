@@ -1,0 +1,68 @@
+{
+  "status": "success",
+  "data": {
+    "type": "raw",
+    "meta": {
+      "rowsScanned": 19,
+      "bytesScanned": 4878,
+      "durationMs": 84,
+      "stepIntervals": {
+        "A": 10
+      }
+    },
+    "data": {
+      "results": [
+        {
+          "queryName": "A",
+          "nextCursor": "",
+          "rows": [
+            {
+              "data": {
+                "durationNano": 50253041,
+                "hasError": false,
+                "httpMethod": "",
+                "httpUrl": "",
+                "kind": 1,
+                "name": "e2e-operation-fixture",
+                "parentSpanID": "",
+                "rpcMethod": "",
+                "service.name": "signoz-cli-e2e",
+                "spanID": "db078f7fae5e5c09",
+                "spanKind": "Internal",
+                "span_id": "db078f7fae5e5c09",
+                "statusCode": 0,
+                "statusCodeString": "Unset",
+                "timestamp": "2026-09-03T06:14:42.9609939Z",
+                "traceID": "0308d01fb0525c4ee499ead7d8089adb",
+                "trace_id": "0308d01fb0525c4ee499ead7d8089adb"
+              },
+              "timestamp": "2026-09-03T06:14:42.9609939Z"
+            },
+            {
+              "data": {
+                "durationNano": 50200969,
+                "hasError": false,
+                "httpMethod": "",
+                "httpUrl": "",
+                "kind": 1,
+                "name": "e2e-operation-fixture",
+                "parentSpanID": "",
+                "rpcMethod": "",
+                "service.name": "signoz-cli-e2e",
+                "spanID": "5a02134b73099221",
+                "spanKind": "Internal",
+                "span_id": "5a02134b73099221",
+                "statusCode": 0,
+                "statusCodeString": "Unset",
+                "timestamp": "2026-09-03T05:54:13.671056909Z",
+                "traceID": "ed34ad73fd1f45793a3bddbe4a7db956",
+                "trace_id": "ed34ad73fd1f45793a3bddbe4a7db956"
+              },
+              "timestamp": "2026-09-03T05:54:13.671056909Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

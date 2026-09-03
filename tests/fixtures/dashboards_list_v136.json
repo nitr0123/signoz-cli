@@ -1,0 +1,47 @@
+{
+  "status": "success",
+  "data": {
+    "dashboards": [
+      {
+        "id": "01a037ad-c6bf-7be5-9245-d9b1f5cadd09",
+        "createdAt": "2026-08-25T06:48:50.623774Z",
+        "updatedAt": "2026-08-25T06:48:50.623774Z",
+        "createdBy": "cli-sa-136@signozserviceaccount.com",
+        "updatedBy": "cli-sa-136@signozserviceaccount.com",
+        "orgId": "01a037ac-0634-74b4-b72f-66494214ead7",
+        "locked": false,
+        "source": "user",
+        "schemaVersion": "v6",
+        "name": "cli136-dash",
+        "tags": [
+          {
+            "key": "ver",
+            "value": "136"
+          }
+        ],
+        "spec": {
+          "display": {
+            "name": "CLI 136 Dash",
+            "description": "t"
+          }
+        },
+        "legacy": false
+      }
+    ],
+    "total": 1,
+    "tags": [
+      {
+        "key": "ver",
+        "value": "136"
+      }
+    ],
+    "reservedKeywords": [
+      "created_at",
+      "created_by",
+      "description",
+      "locked",
+      "name",
+      "updated_at"
+    ]
+  }
+}
