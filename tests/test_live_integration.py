@@ -30,13 +30,13 @@ import time
 import uuid
 
 import pytest
+from seed_live_data import SERVICE_NAME, operation_name, seed
 
 from signoz_cli.client import SigNozApiError, SigNozClient
 from signoz_cli.query import (
     build_logs_query_payload,
     build_traces_query_payload,
 )
-from tests.seed_live_data import SERVICE_NAME, operation_name, seed
 
 pytestmark = [
     pytest.mark.live,
