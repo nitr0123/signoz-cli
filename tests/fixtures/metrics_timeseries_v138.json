@@ -1,0 +1,58 @@
+{
+  "status": "success",
+  "data": {
+    "type": "time_series",
+    "meta": {
+      "rowsScanned": 15796,
+      "bytesScanned": 327702,
+      "durationMs": 15132,
+      "stepIntervals": {
+        "A": 60
+      }
+    },
+    "data": {
+      "results": [
+        {
+          "queryName": "A",
+          "aggregations": [
+            {
+              "index": 0,
+              "alias": "",
+              "meta": {},
+              "series": [
+                {
+                  "values": [
+                    {
+                      "timestamp": 1788412980000,
+                      "value": 43
+                    },
+                    {
+                      "timestamp": 1788413580000,
+                      "value": 43
+                    },
+                    {
+                      "timestamp": 1788414180000,
+                      "value": 43
+                    },
+                    {
+                      "timestamp": 1788414780000,
+                      "value": 43
+                    },
+                    {
+                      "timestamp": 1788414840000,
+                      "value": 86
+                    },
+                    {
+                      "timestamp": 1788415440000,
+                      "value": 43
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

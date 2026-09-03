@@ -1,0 +1,44 @@
+{
+  "status": "success",
+  "data": {
+    "type": "raw",
+    "meta": {
+      "rowsScanned": 10,
+      "bytesScanned": 1790,
+      "durationMs": 18,
+      "stepIntervals": {
+        "A": 10
+      }
+    },
+    "data": {
+      "results": [
+        {
+          "queryName": "A",
+          "nextCursor": "",
+          "rows": [
+            {
+              "data": {
+                "body": "e2e log marker run fixture",
+                "id": "0lgUJ9Egfma6RGhudloILFI9Kj5",
+                "service.name": "signoz-cli-e2e",
+                "severity_text": "INFO",
+                "timestamp": 1788416088150653479
+              },
+              "timestamp": "2026-09-03T06:14:48.150653479Z"
+            },
+            {
+              "data": {
+                "body": "e2e log marker run fixture",
+                "id": "0lgTjBDHQlB0AMjMO9Jkg9EEilV",
+                "service.name": "signoz-cli-e2e",
+                "severity_text": "INFO",
+                "timestamp": 1788414858858304100
+              },
+              "timestamp": "2026-09-03T05:54:18.8583041Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

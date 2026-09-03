@@ -1,0 +1,38 @@
+{
+  "status": "success",
+  "data": {
+    "type": "scalar",
+    "meta": {
+      "rowsScanned": 468,
+      "bytesScanned": 10964,
+      "durationMs": 19,
+      "stepIntervals": {
+        "A": 300
+      }
+    },
+    "data": {
+      "results": [
+        {
+          "queryName": "A",
+          "columns": [
+            {
+              "name": "__result_0",
+              "signal": "",
+              "fieldContext": "",
+              "fieldDataType": "",
+              "queryName": "A",
+              "aggregationIndex": 0,
+              "meta": {},
+              "columnType": "aggregation"
+            }
+          ],
+          "data": [
+            [
+              10
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

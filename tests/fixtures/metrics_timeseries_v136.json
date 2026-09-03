@@ -1,0 +1,38 @@
+{
+  "status": "success",
+  "data": {
+    "type": "time_series",
+    "meta": {
+      "rowsScanned": 182,
+      "bytesScanned": 3990,
+      "durationMs": 103,
+      "stepIntervals": {
+        "A": 60
+      }
+    },
+    "data": {
+      "results": [
+        {
+          "queryName": "A",
+          "aggregations": [
+            {
+              "index": 0,
+              "alias": "",
+              "meta": {},
+              "series": [
+                {
+                  "values": [
+                    {
+                      "timestamp": 1788414840000,
+                      "value": 43
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
