@@ -251,3 +251,88 @@ class TestEmptyResults:
         result = runner.invoke(cli, ["alerts", "history", "not-a-uuid"])
         assert result.exit_code == 0, result.output
         assert "no results" in result.output
+
+
+class TestTailGuards:
+    def test_unbounded_watch_helper_stays_removed(self):
+        import signoz_cli.commands.common as common_mod
+
+        assert not hasattr(common_mod, "_watch_loop")
+
+    def test_interval_zero_rejected(self, runner, monkeypatch):
+        result = runner.invoke(cli, ["logs", "tail", "--interval", "0"])
+        assert result.exit_code == 2
+        assert "--interval must be positive" in result.output
+
+    def test_interval_negative_rejected(self, runner, monkeypatch):
+        result = runner.invoke(cli, ["logs", "tail", "--interval", "-5"])
+        assert result.exit_code == 2
+        assert "--interval must be positive" in result.output
+
+    def test_tail_auth_failure_exits_instead_of_spewing(self, runner, monkeypatch):
+        from signoz_cli.client import SigNozApiError
+
+        polls = {"n": 0}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                polls["n"] += 1
+                raise SigNozApiError(401, "unauthorized: bad key")
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["logs", "tail", "--service", "x"])
+        assert result.exit_code == 1
+        assert polls["n"] == 1, f"polled {polls['n']} times instead of failing fast"
+        assert "401" in result.output
+
+    def test_tail_429_keeps_retrying(self, runner, monkeypatch):
+        from signoz_cli.client import SigNozApiError
+
+        polls = {"n": 0}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                polls["n"] += 1
+                raise SigNozApiError(429, "slow down")
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        # Allow exactly one sleep, then stop the loop via KeyboardInterrupt.
+        # (logs_tail imports time inside the function, so patch the
+        # attribute on the real time module.)
+        import time as _time_mod
+
+        stopper = _StopAfterSleeps(1)
+        monkeypatch.setattr(_time_mod, "sleep", stopper.sleep)
+        result = runner.invoke(cli, ["logs", "tail", "--service", "x",
+                                     "--interval", "0.01"])
+        assert result.exit_code == 0, result.output
+        assert polls["n"] == 2, "429 must be retried, not fatal"
+
+
+class _StopTail(KeyboardInterrupt):
+    pass
+
+
+class _StopAfterSleeps:
+    """sleep() replacement: allows N sleeps, then stops the tail loop."""
+
+    def __init__(self, allowed_sleeps: int):
+        self.allowed_sleeps = allowed_sleeps
+        self.sleeps = 0
+
+    def sleep(self, s):
+        if self.sleeps >= self.allowed_sleeps:
+            raise _StopTail()
+        self.sleeps += 1

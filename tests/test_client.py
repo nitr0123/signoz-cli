@@ -327,3 +327,61 @@ class TestNonJsonResponses:
             c.verify()
         assert exc.value.status_code == 502
         assert "bad gateway" in exc.value.message
+
+
+class TestIdempotentRetry:
+    """Mutations must not be retried on ambiguous failures (duplicates)."""
+
+    def _counting(self, statuses, monkeypatch):
+        import signoz_cli.client as cl
+
+        monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            return httpx.Response(statuses[min(calls["n"] - 1, len(statuses) - 1)],
+                                  json={"status": "success", "data": {}})
+
+        return calls, handler
+
+    def test_post_create_not_retried_on_500(self, monkeypatch):
+        calls, handler = self._counting([500], monkeypatch)
+        with pytest.raises(SigNozApiError):
+            make_client(handler).create_dashboard_v2({"name": "x"})
+        assert calls["n"] == 1
+
+    def test_post_create_not_retried_on_transport_error(self, monkeypatch):
+        import signoz_cli.client as cl
+
+        monkeypatch.setattr(cl.time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            raise httpx.ConnectError("down")
+
+        with pytest.raises(httpx.ConnectError):
+            make_client(handler).create_rule({"name": "x"})
+        assert calls["n"] == 1
+
+    def test_post_create_retried_on_429(self, monkeypatch):
+        calls, handler = self._counting([429, 200], monkeypatch)
+        make_client(handler).create_channel({"name": "x"})
+        assert calls["n"] == 2
+
+    def test_patch_not_retried_on_500(self, monkeypatch):
+        calls, handler = self._counting([500], monkeypatch)
+        with pytest.raises(SigNozApiError):
+            make_client(handler).patch_rule("r1", [{"op": "add"}])
+        assert calls["n"] == 1
+
+    def test_get_still_retried_on_500(self, monkeypatch):
+        calls, handler = self._counting([500, 200], monkeypatch)
+        make_client(handler).list_alerts()
+        assert calls["n"] == 2
+
+    def test_put_full_replace_still_retried(self, monkeypatch):
+        calls, handler = self._counting([503, 200], monkeypatch)
+        make_client(handler).update_channel("c1", {"name": "x"})
+        assert calls["n"] == 2

@@ -63,3 +63,11 @@ class TestResolveTimestamps:
         s, e = resolve_timestamps(None, 9_000_000_000, "1h", unit="ns")
         assert e == 9_000_000_000
         assert e - s == 3_600_000 * 1_000_000
+
+    def test_start_after_end_rejected(self):
+        with pytest.raises(ValueError, match="must be before end"):
+            resolve_timestamps(2000, 1000, "6h")
+
+    def test_start_equal_end_rejected(self):
+        with pytest.raises(ValueError, match="must be before end"):
+            resolve_timestamps(1000, 1000, "6h")

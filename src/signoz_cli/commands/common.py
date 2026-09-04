@@ -23,7 +23,6 @@ from signoz_cli.config import (
     select_profile_name,
 )
 from signoz_cli.output import (
-    emit,
     set_custom_columns,
     set_field_selector,
     set_jsonpath,
@@ -969,46 +968,5 @@ def _skeleton_callback(
 
     click.echo(_json.dumps(skeleton, indent=2))
     ctx.exit()
-
-
-# ===================================================================
-# WATCH MODE — live tail
-# ===================================================================
-
-def _watch_loop(
-    fetch_fn: Any,
-    fmt: str,
-    interval: float = 2.0,
-    table_keys: list[str] | None = None,
-    wide_keys: list[str] | None = None,
-) -> None:
-    """Poll fetch_fn() every *interval* seconds and emit new rows.
-
-    The fetch_fn must return a list of dicts.  Each row is expected to have
-    a unique identifier (traceID or a combination of timestamp+service.name)
-    so we can deduplicate.
-    """
-    import time
-
-    seen: set[str] = set()
-    click.echo("# Watching... (Ctrl+C to stop)", err=True)
-    try:
-        while True:
-            rows = fetch_fn()
-            if isinstance(rows, list):
-                new_rows = []
-                for row in rows:
-                    rid = json.dumps(
-                        {k: row.get(k) for k in ("traceID", "timestamp", "message", "name") if k in row},
-                        sort_keys=True, default=str,
-                    )
-                    if rid not in seen:
-                        seen.add(rid)
-                        new_rows.append(row)
-                if new_rows:
-                    emit(new_rows, fmt, table_keys=table_keys, wide_keys=wide_keys)
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        click.echo("\n# Stopped.", err=True)
 
 

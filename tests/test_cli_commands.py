@@ -145,7 +145,7 @@ class TestLogsTailDedup:
                 raise KeyboardInterrupt
         monkeypatch.setattr(_t, "sleep", fake_sleep)
 
-        result = runner.invoke(cli, ["logs", "tail", "--interval", "0"])
+        result = runner.invoke(cli, ["logs", "tail", "--interval", "0.01"])
         assert result.exit_code == 0, result.output
         # Two polls over identical data, but each body appears exactly once.
         assert result.output.count("boom one") == 1
