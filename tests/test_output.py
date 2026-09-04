@@ -88,6 +88,23 @@ class TestHelpers:
         out = buf_out.getvalue()
         assert "a" in out and "b" in out
 
+    def test_table_keys_mismatch_falls_back_to_full_row(self, capsys):
+        # Regression: rows that share no key with table_keys rendered
+        # as an empty (invisible) table instead of their content.
+        emit([{"data": [], "total": 0}], "table", table_keys=["nope"])
+        out = capsys.readouterr().out
+        assert "total" in out
+
+    def test_empty_envelope_renders_no_results(self, capsys):
+        emit({"status": "success", "data": {"items": [], "total": 0}}, "table")
+        assert "no results" in capsys.readouterr().out
+
+    def test_scalar_list_envelope_kept(self, capsys):
+        # Non-empty scalar lists under envelope keys must not be dropped.
+        emit({"data": ["a", "b"]}, "table")
+        out = capsys.readouterr().out
+        assert "a" in out and "b" in out
+
 
 class TestSortBy:
     def test_sort_ascending(self):
@@ -174,6 +191,24 @@ class TestJsonpath:
     def test_missing_field(self):
         data = [{"a": 1}]
         assert _jsonpath_extract(data, "$[*].b") == [None]
+
+    def test_nested_wildcard_keeps_remainder(self):
+        data = {"items": [{"name": "a"}, {"name": "b"}]}
+        assert _jsonpath_extract(data, "$.items[*].name") == ["a", "b"]
+
+    def test_nested_wildcard_deep_remainder(self):
+        data = {"a": [{"b": {"c": 1}}, {"b": {"c": 2}}]}
+        assert _jsonpath_extract(data, "$.a[*].b.c") == [1, 2]
+
+    def test_nested_index(self):
+        data = {"items": [{"name": "a"}, {"name": "b"}]}
+        assert _jsonpath_extract(data, "$.items[0].name") == "a"
+        assert _jsonpath_extract(data, "$.items[1].name") == "b"
+        assert _jsonpath_extract(data, "$.items[5].name") is None
+
+    def test_top_level_wildcard_with_remainder(self):
+        data = [{"name": "a"}, {"name": "b"}]
+        assert _jsonpath_extract(data, "$[*].name") == ["a", "b"]
 
 
 class TestYaml:

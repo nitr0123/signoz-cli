@@ -169,6 +169,7 @@ def _jsonpath_extract(data: Any, path: str) -> Any:
       $.field                 — top-level field
       $[*].field              — map field over array
       $.items[*].field        — map field over nested array
+      $.items[0].field        — index into nested array, then field
     """
     if not path.startswith("$"):
         raise click.UsageError(f"JSONPath must start with $: {path!r}")
@@ -206,10 +207,11 @@ def _jsonpath_extract(data: Any, path: str) -> Any:
 
     # Process dot-separated segments on scalar objects
     segments = [s for s in rest.split(".") if s]
-    for seg in segments:
+    for i, seg in enumerate(segments):
         if current is None:
             return None
-        # Array wildcard: field[*]
+        # Array wildcard: field[*], optionally followed by more segments
+        # which are applied to each element (e.g. items[*].name).
         m_wild = re.fullmatch(r"(.+)\[\*\](.*)", seg)
         if m_wild:
             container_key = m_wild.group(1)
@@ -222,12 +224,37 @@ def _jsonpath_extract(data: Any, path: str) -> Any:
                 return None
             if not isinstance(arr, list):
                 return None
-            if remainder.startswith("."):
-                sub = remainder[1:]
-                return [_jsonpath_extract(item, f"$.{sub}") for item in arr]
-            elif remainder:
-                return [_jsonpath_extract(item, f"$.{remainder}") for item in arr]
-            return arr
+            tail = remainder
+            if tail.startswith("."):
+                tail = tail[1:]
+            rest_segs = ([tail] if tail else []) + segments[i + 1 :]
+            if not rest_segs:
+                return arr
+            sub = ".".join(rest_segs)
+            return [_jsonpath_extract(item, f"$.{sub}") for item in arr]
+        # Array index: field[N], optionally followed by more segments.
+        m_idx = re.fullmatch(r"(.+)\[(\d+)\](.*)", seg)
+        if m_idx:
+            container_key, idx_s, remainder = m_idx.groups()
+            if container_key and isinstance(current, dict):
+                arr = current.get(container_key)
+            elif isinstance(current, list):
+                arr = current
+            else:
+                return None
+            if not isinstance(arr, list):
+                return None
+            idx = int(idx_s)
+            if idx >= len(arr):
+                return None
+            current = arr[idx]
+            tail = remainder
+            if tail.startswith("."):
+                tail = tail[1:]
+            rest_segs = ([tail] if tail else []) + segments[i + 1 :]
+            if not rest_segs:
+                return current
+            return _jsonpath_extract(current, "$." + ".".join(rest_segs))
         # Plain field
         if isinstance(current, dict):
             current = current.get(seg)
@@ -390,8 +417,20 @@ def _unwrap_to_rows(data: Any) -> list[dict[str, Any]]:
     if isinstance(data, dict):
         for key in ("data", "result", "items"):
             val = data.get(key)
-            if isinstance(val, list) and val and isinstance(val[0], dict):
-                return val
+            if isinstance(val, list):
+                if not val:
+                    # Empty envelope (e.g. {"data": [], "total": 0}): no
+                    # rows, so downstream renders "(no results)".
+                    return []
+                if isinstance(val[0], dict):
+                    return val
+            elif isinstance(val, dict):
+                # Nested envelope holding an empty list, e.g.
+                # {"data": {"items": [], "total": 0}} -> no rows either.
+                if _unwrap_to_rows(val) == []:
+                    return []
+        # Single dict → key-value table
+        return [data]
         # Single dict → key-value table
         return [data]
     return [{"value": data}]
@@ -525,7 +564,13 @@ def _print_table(
             return
         if isinstance(data[0], dict):
             if table_keys:
-                data = [{k: row[k] for k in table_keys if k in row} for row in data]
+                # Prune to known columns, but never render a row empty: if
+                # none of the keys match (e.g. an unexpected envelope shape),
+                # fall back to the full row instead of printing nothing.
+                data = [
+                    {k: row[k] for k in table_keys if k in row} or dict(row)
+                    for row in data
+                ]
             _dict_list_table(console, data, wide=wide, wide_keys=wide_keys)
         else:
             _write("\n".join(str(item) for item in data) + "\n")

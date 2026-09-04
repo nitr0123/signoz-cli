@@ -170,7 +170,10 @@ def metrics_query(
         )
         resp = client.query_builder_v5(payload)
         _warn_v5(resp)
-        emit(_unwrap_time_series(resp), fmt,
+        rows = _unwrap_time_series(resp)
+        if not rows:
+            _warn_empty_metrics(metric_name)
+        emit(rows, fmt,
              table_keys=["series", "timestamp", "value"])
     except Exception as ex:
         _handle_error(ex)
@@ -242,9 +245,34 @@ def metrics_stats(
         )
         resp = client.query_builder_v5(payload)
         _warn_v5(resp)
+        if _scalar_results_empty(resp):
+            _warn_empty_metrics(metric_name)
         _emit_scalar_stats(resp, fmt)
     except Exception as ex:
         _handle_error(ex)
+
+
+def _warn_empty_metrics(metric_name: str) -> None:
+    """Hint when a metrics query returns no points (often temporality).
+
+    Counters usually need --time-aggregation sum (Cumulative temporality
+    is auto-selected for sum/rate); gauges work with the default avg.
+    """
+    click.echo(
+        f"Warning: no points for '{metric_name}'. Counters usually need "
+        "--time-aggregation sum (Cumulative temporality is auto-selected "
+        "for sum/rate); gauges work with the default avg.",
+        err=True,
+    )
+
+
+def _scalar_results_empty(data: Any) -> bool:
+    """True when a scalar v5 response carries no data rows."""
+    try:
+        results = data["data"]["data"]["results"]
+    except (KeyError, TypeError, IndexError):
+        return True
+    return not any(isinstance(r, dict) and r.get("data") for r in results or [])
 
 
 def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
@@ -256,8 +284,9 @@ def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
         return
     rows: list[dict[str, Any]] = []
     for result in results or []:
-        columns = result.get("columns", [])
-        data_rows = result.get("data", [])
+        # Servers send explicit nulls (see recorded fixtures); tolerate them.
+        columns = result.get("columns") or []
+        data_rows = result.get("data") or []
         group_cols = [c["name"] for c in columns if c.get("columnType") == "group"]
         # Use a readable label instead of __result_N
         agg_label = "value"

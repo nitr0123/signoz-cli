@@ -174,10 +174,11 @@ class TestErrorHandling:
         assert exc.value.status_code == 403
         assert "authz_forbidden" in str(exc.value)
 
-    def test_non_json_success_returns_raw_dict(self):
+    def test_non_json_success_raises_api_error(self):
         def handler(request):
             return httpx.Response(200, text="<html>fallback</html>")
-        assert make_client(handler).list_alerts() == {"raw": "<html>fallback</html>"}
+        with pytest.raises(SigNozApiError, match="non-JSON"):
+            make_client(handler).list_alerts()
 
 
 class TestNetworkRetry:
@@ -282,3 +283,47 @@ class TestServiceAccountRoles:
         c = make_client(handler)
         _data, failed = c.create_service_account("new-sa", ["role-id-1"])
         assert failed == []
+
+
+class TestNonJsonResponses:
+    def test_html_200_raises_api_error(self):
+        # Unknown API paths serve the SPA fallback page with HTTP 200
+        # (seen with saved-views on v0.136). Must fail loudly instead of
+        # rendering HTML as table rows.
+        def handler(request):
+            return httpx.Response(
+                200,
+                content=b"<!doctype html><html></html>",
+                headers={"content-type": "text/html"},
+            )
+
+        c = make_client(handler)
+        with pytest.raises(SigNozApiError) as exc:
+            c.list_saved_views()
+        assert exc.value.status_code == 200
+        assert "non-JSON" in exc.value.message
+
+    def test_plain_text_200_raises_api_error(self):
+        def handler(request):
+            return httpx.Response(200, content=b"OK")
+
+        c = make_client(handler)
+        with pytest.raises(SigNozApiError):
+            c.verify()
+
+    def test_empty_body_still_ok(self):
+        def handler(request):
+            return httpx.Response(200, content=b"")
+
+        c = make_client(handler)
+        assert c.verify() == {}
+
+    def test_html_error_body_extracts_text(self):
+        def handler(request):
+            return httpx.Response(502, content=b"<html>bad gateway</html>")
+
+        c = make_client(handler)
+        with pytest.raises(SigNozApiError) as exc:
+            c.verify()
+        assert exc.value.status_code == 502
+        assert "bad gateway" in exc.value.message

@@ -195,3 +195,59 @@ class TestDryRunDeletes:
         )
         assert result.exit_code == 2
         assert "--yes" in result.output
+
+
+class TestEmptyResults:
+    def test_metrics_query_empty_warns_on_stderr(self, runner, monkeypatch):
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "time_series",
+                        "data": {"results": [{"queryName": "A",
+                                             "aggregations": None}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["metrics", "query", "some.counter"])
+        assert result.exit_code == 0, result.output
+        assert "Warning: no points" in result.output
+
+    def test_metrics_stats_empty_warns_on_stderr(self, runner, monkeypatch):
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "scalar",
+                        "data": {"results": [{"queryName": "A",
+                                             "columns": None, "data": []}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["metrics", "stats", "some.counter"])
+        assert result.exit_code == 0, result.output
+        assert "Warning: no points" in result.output
+
+    def test_alerts_history_empty_says_no_results(self, runner, monkeypatch):
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_alert_history_timeline(self, *a, **k):
+                return {"status": "success",
+                        "data": {"items": [], "total": 0}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "history", "not-a-uuid"])
+        assert result.exit_code == 0, result.output
+        assert "no results" in result.output
