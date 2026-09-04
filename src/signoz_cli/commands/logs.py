@@ -6,6 +6,7 @@ from collections import OrderedDict
 
 import click
 
+from signoz_cli.client import SigNozApiError
 from signoz_cli.commands.common import (
     _NO_FIELD_AGGREGATIONS,
     _VALID_AGGREGATIONS,
@@ -292,6 +293,8 @@ def logs_tail(
     """Follow new logs as they arrive (poll-based; Ctrl-C to stop)."""
     import time as _time
 
+    if interval <= 0:
+        raise click.UsageError("--interval must be positive (seconds between polls).")
     try:
         client = _get_client(endpoint, token, profile)
     except Exception as ex:
@@ -314,8 +317,17 @@ def logs_tail(
             )
             try:
                 rows = _unwrap_v5(client.query_builder_v5(payload))
+            except SigNozApiError as ex:
+                if ex.status_code in (400, 401, 403, 404):
+                    # Auth/permission/bad-request will never resolve by
+                    # retrying: fail instead of spewing forever.
+                    _handle_error(ex)
+                    return
+                click.echo(f"tail: {ex} (retrying)", err=True)
+                _time.sleep(interval)
+                continue
             except Exception as ex:
-                click.echo(f"tail: {ex}", err=True)
+                click.echo(f"tail: {ex} (retrying)", err=True)
                 _time.sleep(interval)
                 continue
             if isinstance(rows, list):

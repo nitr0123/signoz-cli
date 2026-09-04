@@ -214,13 +214,13 @@ class SigNozClient:
         return self._get(f"/api/v2/dashboards/{dashboard_id}")
 
     def create_dashboard_v2(self, dashboard: dict[str, Any]) -> Any:
-        return self._post("/api/v2/dashboards", json_body=dashboard)
+        return self._post("/api/v2/dashboards", json_body=dashboard, idempotent=False)
 
     def update_dashboard_v2(self, dashboard_id: str, dashboard: dict[str, Any]) -> Any:
         return self._put(f"/api/v2/dashboards/{dashboard_id}", json_body=dashboard)
 
     def patch_dashboard_v2(self, dashboard_id: str, patches: list[dict[str, Any]]) -> Any:
-        return self._patch(f"/api/v2/dashboards/{dashboard_id}", json_body=patches)
+        return self._patch(f"/api/v2/dashboards/{dashboard_id}", json_body=patches, idempotent=False)
 
     def delete_dashboard_v2(self, dashboard_id: str) -> Any:
         resp = self._request("DELETE", f"/api/v2/dashboards/{dashboard_id}")
@@ -332,13 +332,13 @@ class SigNozClient:
     # ------------------------------------------------------------------
 
     def create_rule(self, rule: dict[str, Any]) -> Any:
-        return self._post("/api/v2/rules", json_body=rule)
+        return self._post("/api/v2/rules", json_body=rule, idempotent=False)
 
     def update_rule(self, rule_id: str, rule: dict[str, Any]) -> Any:
         return self._put(f"/api/v2/rules/{rule_id}", json_body=rule)
 
     def patch_rule(self, rule_id: str, patches: list[dict[str, Any]]) -> Any:
-        return self._patch(f"/api/v2/rules/{rule_id}", json_body=patches)
+        return self._patch(f"/api/v2/rules/{rule_id}", json_body=patches, idempotent=False)
 
     def delete_rule(self, rule_id: str) -> Any:
         resp = self._request("DELETE", f"/api/v2/rules/{rule_id}")
@@ -358,7 +358,7 @@ class SigNozClient:
         return self._get(f"/api/v1/channels/{channel_id}")
 
     def create_channel(self, channel: dict[str, Any]) -> Any:
-        return self._post("/api/v1/channels", json_body=channel)
+        return self._post("/api/v1/channels", json_body=channel, idempotent=False)
 
     def update_channel(self, channel_id: str, channel: dict[str, Any]) -> Any:
         return self._put(f"/api/v1/channels/{channel_id}", json_body=channel)
@@ -378,7 +378,7 @@ class SigNozClient:
         return self._get(f"/api/v1/saved_views/{view_id}")
 
     def create_saved_view(self, view: dict[str, Any]) -> Any:
-        return self._post("/api/v1/saved_views", json_body=view)
+        return self._post("/api/v1/saved_views", json_body=view, idempotent=False)
 
     def delete_saved_view(self, view_id: str) -> Any:
         resp = self._request("DELETE", f"/api/v1/saved_views/{view_id}")
@@ -399,7 +399,7 @@ class SigNozClient:
         Returns (response, failed_role_ids) so callers can warn when a role
         could not be assigned instead of failing silently.
         """
-        data = self._post("/api/v1/service_accounts", json_body={"name": name})
+        data = self._post("/api/v1/service_accounts", json_body={"name": name}, idempotent=False)
         failed_roles: list[str] = []
         if role_ids and isinstance(data, dict):
             new_id = (data.get("data") or {}).get("id")
@@ -409,6 +409,7 @@ class SigNozClient:
                         self._post(
                             f"/api/v1/service_accounts/{new_id}/roles",
                             json_body={"id": rid},
+                            idempotent=False,
                         )
                     except SigNozApiError as exc:
                         failed_roles.append(f"{rid}: {exc.message}")
@@ -428,8 +429,17 @@ class SigNozClient:
         *,
         params: dict[str, str] | None = None,
         json_body: Any = None,
+        idempotent: bool = True,
     ) -> httpx.Response:
-        """Send a request with retry/backoff on 429, transient 5xx, and network errors."""
+        """Send a request with retry/backoff on 429, transient 5xx, and network errors.
+
+        Retrying is only safe when the outcome is known-untouched: 429 means
+        the server explicitly rejected the request, so even non-idempotent
+        calls may retry those. Transport errors and 5xx leave the outcome
+        ambiguous (the server may have committed before failing), so they
+        are retried only for idempotent calls. Callers performing creates
+        or patches must pass ``idempotent=False`` to avoid duplicates.
+        """
         attempt = 0
         while True:
             try:
@@ -437,13 +447,15 @@ class SigNozClient:
                     method, f"{self.endpoint}{path}", params=params, json=json_body
                 )
             except httpx.TransportError:
-                # Connection reset / DNS / read timeout etc. -- treat as transient.
-                if attempt < self.max_retries:
+                # Connection reset / DNS / read timeout etc. -- outcome unknown.
+                if idempotent and attempt < self.max_retries:
                     time.sleep(min(2**attempt, 30))
                     attempt += 1
                     continue
                 raise
             if resp.status_code in _RETRYABLE and attempt < self.max_retries:
+                if resp.status_code != 429 and not idempotent:
+                    return resp
                 delay = min(2**attempt, 30)
                 if resp.status_code == 429:
                     retry_after = _parse_retry_after(resp.headers.get("Retry-After", ""))
@@ -482,14 +494,20 @@ class SigNozClient:
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any:
         return self._parse(self._request("GET", path, params=params))
 
-    def _post(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._request("POST", path, json_body=json_body))
+    def _post(self, path: str, json_body: Any = None, idempotent: bool = True) -> Any:
+        return self._parse(
+            self._request("POST", path, json_body=json_body, idempotent=idempotent)
+        )
 
-    def _put(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._request("PUT", path, json_body=json_body))
+    def _put(self, path: str, json_body: Any = None, idempotent: bool = True) -> Any:
+        return self._parse(
+            self._request("PUT", path, json_body=json_body, idempotent=idempotent)
+        )
 
-    def _patch(self, path: str, json_body: Any = None) -> Any:
-        return self._parse(self._request("PATCH", path, json_body=json_body))
+    def _patch(self, path: str, json_body: Any = None, idempotent: bool = True) -> Any:
+        return self._parse(
+            self._request("PATCH", path, json_body=json_body, idempotent=idempotent)
+        )
 
 
 def _extract_error(resp: httpx.Response) -> str:

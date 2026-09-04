@@ -41,6 +41,10 @@ def resolve_timestamps(
     now_val = now_ms * factor
 
     if start is not None and end is not None:
+        if start >= end:
+            raise ValueError(
+                f"Invalid time window: start ({start}) must be before end ({end})."
+            )
         return start, end
 
     effective_default = profile_time_range if profile_time_range else default_range
