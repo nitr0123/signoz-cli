@@ -468,7 +468,16 @@ class SigNozClient:
         try:
             return resp.json()
         except ValueError:
-            return {"raw": resp.text}
+            # A 200 with a non-JSON body is almost always the frontend
+            # fallback page: the API path does not exist on this server
+            # version (seen with saved-views on v0.136). Fail loudly
+            # instead of rendering HTML as table rows.
+            ctype = resp.headers.get("content-type", "unknown")
+            raise SigNozApiError(
+                resp.status_code,
+                f"unexpected non-JSON response (content-type: {ctype}); "
+                "this API may not exist on the server version",
+            ) from None
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any:
         return self._parse(self._request("GET", path, params=params))
