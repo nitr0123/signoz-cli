@@ -37,11 +37,6 @@ def query_raw(endpoint: str | None, token: str | None, fmt: str,
         _handle_error(e)
 
 
-# ===================================================================
-# METRICS QUERY (values)
-# ===================================================================
-
-
 @cli.command("promql")
 @_common_options
 @click.argument("query")
@@ -64,6 +59,8 @@ def promql_query(
 
       signoz promql 'sum({__name__="app.payments.total"})' --time-range 1h
     """
+    if step <= 0:
+        raise click.UsageError("--step must be positive (seconds per bucket).")
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
@@ -102,11 +99,5 @@ def sql_query(
         emit(_unwrap_v5(resp), fmt)
     except Exception as ex:
         _handle_error(ex)
-
-
-
-# ===================================================================
-# TRACE DETAIL / LOGS TAIL
-# ===================================================================
 
 

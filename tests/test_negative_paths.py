@@ -336,3 +336,96 @@ class _StopAfterSleeps:
         if self.sleeps >= self.allowed_sleeps:
             raise _StopTail()
         self.sleeps += 1
+
+
+class TestStepValidation:
+    @pytest.mark.parametrize("argv", [
+        ["metrics", "query", "m", "--step", "0"],
+        ["metrics", "query", "m", "--step", "-5"],
+        ["metrics", "stats", "m", "--step", "0"],
+        ["promql", "sum(x)", "--step", "-1"],
+    ])
+    def test_nonpositive_step_rejected(self, runner, argv):
+        result = runner.invoke(cli, argv)
+        assert result.exit_code == 2, result.output
+        assert "--step must be positive" in result.output
+
+
+class TestTimeoutValidation:
+    def test_env_timeout_garbage_rejected(self, runner, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_TIMEOUT", "soon")
+        result = runner.invoke(cli, ["services", "list"])
+        assert result.exit_code == 2, result.output
+        assert "SIGNOZ_TIMEOUT" in result.output
+
+    def test_env_timeout_zero_rejected(self, runner, monkeypatch):
+        monkeypatch.setenv("SIGNOZ_TIMEOUT", "0")
+        result = runner.invoke(cli, ["services", "list"])
+        assert result.exit_code == 2, result.output
+        assert "must be positive" in result.output
+
+    def test_flag_timeout_zero_rejected(self, runner):
+        result = runner.invoke(cli, ["services", "list", "--timeout", "0"])
+        assert result.exit_code == 2, result.output
+        assert "must be positive" in result.output
+
+    def test_profile_timeout_garbage_rejected(self, runner, monkeypatch):
+        from signoz_cli.config import save_config
+
+        save_config({"profiles": {"t": {
+            "endpoint": "http://t:1", "token": "tok", "timeout": "soon",
+        }}})
+        result = runner.invoke(cli, ["services", "list", "-p", "t"])
+        assert result.exit_code == 2, result.output
+        assert "profile 't'" in result.output
+
+
+class TestAlertsPatchDirect:
+    def test_patch_goes_to_patch_endpoint(self, runner, monkeypatch, tmp_path):
+        calls = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_alert(self, rule_id):
+                calls["get"] = True
+                raise AssertionError("read-modify-write GET must not happen")
+
+            def patch_rule(self, rule_id, patches):
+                calls["patch"] = (rule_id, patches)
+                return {"status": "success", "data": {"id": rule_id}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        import json as _json
+
+        ops = [{"op": "replace", "path": "/name", "value": "new"}]
+        pf = tmp_path / "patch.json"
+        pf.write_text(_json.dumps(ops))
+        result = runner.invoke(cli, ["alerts", "patch", "r1", str(pf), "--json"])
+        assert result.exit_code == 0, result.output
+        assert calls.get("patch") == ("r1", ops)
+        assert "get" not in calls
+
+
+class TestConfigureValidation:
+    def test_bad_default_time_range_rejected(self, runner):
+        result = runner.invoke(cli, [
+            "configure", "-p", "x", "--endpoint", "http://x:1",
+            "--token", "tok", "--default-time-range", "bogus",
+        ])
+        assert result.exit_code == 2, result.output
+        assert "default-time-range" in result.output
+
+    def test_good_default_time_range_accepted(self, runner):
+        from signoz_cli.config import load_config
+
+        result = runner.invoke(cli, [
+            "configure", "-p", "x", "--endpoint", "http://x:1",
+            "--token", "tok", "--default-time-range", "24h",
+        ])
+        assert result.exit_code == 0, result.output
+        assert load_config()["profiles"]["x"]["default_time_range"] == "24h"

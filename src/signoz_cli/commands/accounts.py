@@ -128,10 +128,3 @@ def service_accounts_roles(endpoint: str | None, token: str | None, fmt: str,
         emit({"data": simplified}, fmt)
     except Exception as e:
         _handle_error(e)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-

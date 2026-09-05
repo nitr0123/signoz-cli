@@ -102,11 +102,6 @@ def metrics_field_values(
         _handle_error(e)
 
 
-# ===================================================================
-# ALERTS
-# ===================================================================
-
-
 @metrics.command("query")
 @_common_options
 @click.argument("metric_name")
@@ -153,6 +148,8 @@ def metrics_query(
 
       signoz metrics query system.cpu.time --group-by "host.name"
     """
+    if step <= 0:
+        raise click.UsageError("--step must be positive (seconds per bucket).")
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
@@ -227,6 +224,8 @@ def metrics_stats(
 
       signoz metrics stats cpu_usage --time-aggregation avg --reduce-to avg --group-by host.name
     """
+    if step <= 0:
+        raise click.UsageError("--step must be positive (seconds per bucket).")
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="24h",
