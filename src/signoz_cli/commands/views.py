@@ -67,8 +67,3 @@ def views_delete(endpoint: str | None, token: str | None, fmt: str,
         _handle_error(e)
 
 
-# ===================================================================
-# SERVICE ACCOUNTS (admin)
-# ===================================================================
-
-

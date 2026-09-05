@@ -1,5 +1,6 @@
 """Shared test fixtures and state reset."""
 
+import signoz_cli.commands.common as _common
 import signoz_cli.output as _out
 
 
@@ -15,6 +16,9 @@ def _reset_output_state() -> None:
     _out._CUSTOM_COLUMNS = None
     _out._JSONPATH = None
     _out._FIELD_SELECTOR = {}
+    # Root -p profile: a test that sets this and fails mid-way must not
+    # leak the profile into unrelated tests.
+    _common._ROOT_PROFILE = None
 
 
 def pytest_runtest_setup(item) -> None:  # noqa: ANN001

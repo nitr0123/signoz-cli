@@ -265,11 +265,6 @@ def logs_field_values(
         _handle_error(e)
 
 
-# ===================================================================
-# TRACES
-# ===================================================================
-
-
 @logs.command("tail")
 @_common_options
 @click.option("--service", default=None, help="Service name filter.")
@@ -351,11 +346,5 @@ def logs_tail(
             _time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("Stopped.", err=True)
-
-
-
-# ===================================================================
-# ALERT RULE MANAGEMENT (v2)
-# ===================================================================
 
 

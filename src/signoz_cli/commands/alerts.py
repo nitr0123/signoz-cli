@@ -7,7 +7,6 @@ import click
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
     _MAX_PAGES,
-    _apply_json_patch,
     _common_options,
     _confirm,
     _extract_alerts,
@@ -228,11 +227,6 @@ def alerts_top_contributors(
         _handle_error(ex)
 
 
-# ===================================================================
-# DASHBOARDS (v2 / Perses-compatible, required on 0.135+)
-# ===================================================================
-
-
 @alerts.command("create")
 @_common_options
 @click.argument("json_file", type=click.Path())
@@ -270,20 +264,17 @@ def alerts_update(endpoint: str | None, token: str | None, fmt: str,
 @click.argument("json_file", type=click.Path())
 def alerts_patch(endpoint: str | None, token: str | None, fmt: str,
                  profile: str | None, rule_id: str, json_file: str) -> None:
-    """Apply partial updates to a rule (JSON-Patch ops merged client-side)."""
+    """Apply partial updates to a rule (JSON-Patch ops sent to the v2 API).
+
+    Example patch file:
+      [{"op": "replace", "path": "/name", "value": "new name"}]
+    """
     try:
         patches = _read_json(json_file)
         if not isinstance(patches, list):
             raise click.UsageError("Patch file must contain a JSON array.")
         client = _get_client(endpoint, token, profile)
-        current = client.get_alert(rule_id)
-        rule = current.get("data", current) if isinstance(current, dict) else current
-        updated = _apply_json_patch(rule, patches)
-        # strip server-managed fields the PUT schema rejects
-        for key in ("id", "createdAt", "updatedAt", "updatedBy", "createdBy"):
-            if isinstance(updated, dict):
-                updated.pop(key, None)
-        data = client.update_rule(rule_id, updated)
+        data = client.patch_rule(rule_id, patches)
         emit(data or {"status": "patched"}, fmt)
     except Exception as e:
         _handle_error(e)

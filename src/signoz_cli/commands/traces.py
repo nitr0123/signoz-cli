@@ -315,11 +315,6 @@ def traces_field_values(
         _handle_error(e)
 
 
-# ===================================================================
-# QUERY (raw Query Builder v5)
-# ===================================================================
-
-
 @traces.command("detail")
 @_common_options
 @click.argument("trace_id")

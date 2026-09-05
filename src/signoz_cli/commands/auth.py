@@ -26,6 +26,7 @@ from signoz_cli.config import (
     select_profile_name,
 )
 from signoz_cli.output import emit
+from signoz_cli.timeutil import parse_time_range
 
 
 @cli.command()
@@ -65,6 +66,14 @@ def configure(
         "token": token,
     }
     if default_time_range:
+        # Fail fast: a typo here would otherwise break every later query.
+        try:
+            parse_time_range(default_time_range)
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid --default-time-range '{default_time_range}'. "
+                "Use formats like '30m', '24h', '7d'."
+            ) from None
         profiles[profile_name]["default_time_range"] = default_time_range
     if default_format:
         profiles[profile_name]["default_format"] = default_format
@@ -222,10 +231,5 @@ def auth_verify(endpoint: str | None, token: str | None, fmt: str,
             )
     except Exception as e:
         _handle_error(e)
-
-
-# ===================================================================
-# METRICS
-# ===================================================================
 
 

@@ -415,11 +415,27 @@ def _get_client(
         )
 
     env_timeout = os.getenv("SIGNOZ_TIMEOUT")
-    timeout: float = (
-        float(_TIMEOUT_HOLDER["value"])
-        if _TIMEOUT_HOLDER["value"] is not None
-        else (float(env_timeout) if env_timeout else 120.0)
-    )
+
+    def _parse_timeout(raw: Any, source: str) -> float | None:
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise click.UsageError(
+                f"Invalid timeout {raw!r} from {source}: must be a number of seconds."
+            ) from None
+        if value <= 0:
+            raise click.UsageError(
+                f"Invalid timeout {raw!r} from {source}: must be positive."
+            )
+        return value
+
+    timeout = _parse_timeout(_TIMEOUT_HOLDER["value"], "--timeout")
+    if timeout is None and env_timeout:
+        timeout = _parse_timeout(env_timeout, "SIGNOZ_TIMEOUT")
+    if timeout is None:
+        timeout = 120.0
     insecure = _INSECURE_HOLDER["value"] or os.getenv("SIGNOZ_INSECURE", "") == "1"
 
     cfg = load_config()
@@ -427,8 +443,11 @@ def _get_client(
         cfg, profile or _ROOT_PROFILE, os.getenv("SIGNOZ_PROFILE")
     )
     prof = get_profiles(cfg).get(selected or "", {})
-    if "timeout" in prof and _TIMEOUT_HOLDER["value"] is None and not os.getenv("SIGNOZ_TIMEOUT"):
-        timeout = float(prof["timeout"])
+    if "timeout" in prof and timeout == 120.0 and not _TIMEOUT_HOLDER["value"] and not env_timeout:
+        # Profile default applies only when nothing else set it.
+        parsed = _parse_timeout(prof["timeout"], f"profile '{selected}'")
+        if parsed is not None:
+            timeout = parsed
     if prof.get("insecure"):
         insecure = True
 
@@ -887,10 +906,6 @@ def _pagination_meta(total: int, offset: int, limit: int) -> dict[str, Any]:
         "nextOffset": offset + limit if offset + limit < total else None,
     }
 
-
-# ===================================================================
-# EXPLAIN — built-in docs for query syntax
-# ===================================================================
 
 def _add_skeleton_option(cmd: click.Command) -> click.Command:
     """Add --generate-cli-skeleton to a command."""
