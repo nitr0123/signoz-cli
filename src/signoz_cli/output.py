@@ -93,9 +93,15 @@ def set_field_selector(selector: str | None) -> None:
     result: dict[str, str] = {}
     for part in selector.split(","):
         part = part.strip()
-        if "=" in part:
-            k, v = part.split("=", 1)
-            result[k.strip()] = v.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise click.UsageError(
+                f"Invalid --field-selector {part!r}: expected key=value pairs "
+                "separated by commas."
+            )
+        k, v = part.split("=", 1)
+        result[k.strip()] = v.strip()
     _FIELD_SELECTOR = result
 
 

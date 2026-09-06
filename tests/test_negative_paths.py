@@ -429,3 +429,57 @@ class TestConfigureValidation:
         ])
         assert result.exit_code == 0, result.output
         assert load_config()["profiles"]["x"]["default_time_range"] == "24h"
+
+
+class TestFieldSelectorValidation:
+    def test_malformed_part_rejected(self, runner):
+        result = runner.invoke(cli, ["traces", "search", "--field-selector", "hasError"])
+        assert result.exit_code == 2, result.output
+        assert "key=value" in result.output
+
+    def test_mixed_valid_and_malformed_rejected(self, runner):
+        result = runner.invoke(
+            cli, ["traces", "search", "--field-selector", "a=b,oops"])
+        assert result.exit_code == 2, result.output
+
+    def test_value_may_contain_equals(self, runner, monkeypatch):
+        from signoz_cli import output as _output
+
+        result = runner.invoke(
+            cli, ["traces", "search", "--field-selector", "k=a=b", "--json"])
+        # Parsing must succeed (exit 2 would mean rejection); the query
+        # itself fails without a server, but not on selector parsing.
+        assert result.exit_code != 2 or "key=value" not in result.output
+        assert _output._FIELD_SELECTOR == {"k": "a=b"}
+
+
+class TestUnknownProfile:
+    def test_typo_profile_fails_fast(self, runner, monkeypatch):
+        from signoz_cli.config import save_config
+
+        save_config({"profiles": {"prod": {
+            "endpoint": "http://prod:1", "token": "tok",
+        }}})
+        result = runner.invoke(cli, ["traces", "search", "-p", "prodd"])
+        assert result.exit_code == 2, result.output
+        assert "prodd" in result.output
+
+    def test_env_profile_typo_fails_fast(self, runner, monkeypatch):
+        from signoz_cli.config import save_config
+
+        save_config({"profiles": {"prod": {
+            "endpoint": "http://prod:1", "token": "tok",
+        }}})
+        monkeypatch.setenv("SIGNOZ_PROFILE", "prodd")
+        result = runner.invoke(cli, ["traces", "search"])
+        assert result.exit_code == 2, result.output
+        assert "prodd" in result.output
+
+
+class TestAlertsTestValidation:
+    def test_list_rule_file_rejected(self, runner, tmp_path):
+        pf = tmp_path / "rule.json"
+        pf.write_text("[1, 2]")
+        result = runner.invoke(cli, ["alerts", "test", str(pf)])
+        assert result.exit_code == 2, result.output
+        assert "JSON object" in result.output

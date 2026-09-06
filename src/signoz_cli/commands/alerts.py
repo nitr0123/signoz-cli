@@ -312,6 +312,8 @@ def alerts_test(endpoint: str | None, token: str | None, fmt: str,
     """Dry-run a rule payload and see what would fire."""
     try:
         rule = _read_json(json_file)
+        if not isinstance(rule, dict):
+            raise click.UsageError("Rule file must contain a JSON object.")
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         rule = dict(rule)
