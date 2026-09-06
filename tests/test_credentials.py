@@ -69,9 +69,11 @@ class TestResolveCredentials:
         ep, tok = _resolve_credentials(None, None, None)
         assert (ep, tok) == ("http://legacy:8080", "tok-legacy")
 
-    def test_unknown_profile_falls_back_to_legacy(self, multi_config):
-        ep, tok = _resolve_credentials(None, None, "does-not-exist")
-        assert (ep, tok) == ("http://legacy:8080", "tok-legacy")
+    def test_unknown_profile_is_rejected(self, multi_config):
+        import click
+
+        with pytest.raises(click.UsageError, match="does-not-exist"):
+            _resolve_credentials(None, None, "does-not-exist")
 
     def test_nothing_configured(self, tmp_path, monkeypatch):
         cfg_dir = tmp_path / ".signoz"
@@ -110,3 +112,21 @@ class TestServerVersionCompat:
         assert _is_supported_server("v0.138.0") is True
         assert _is_supported_server("v0.135.9") is False
         assert _is_supported_server("unknown") is False
+
+
+class TestEndpointNormalization:
+    def test_bare_host_port_gets_http_scheme(self, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", __import__("pathlib").Path("/nonexistent-signoz-test"))
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        ep, tok = cm._resolve_credentials("localhost:8080", "tok", None)
+        assert ep == "http://localhost:8080"
+        assert tok == "tok"
+
+    def test_explicit_scheme_untouched(self, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        ep, _ = cm._resolve_credentials("https://h:443/x", "tok", None)
+        assert ep == "https://h:443/x"

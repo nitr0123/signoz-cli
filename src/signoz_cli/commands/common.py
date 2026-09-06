@@ -195,11 +195,21 @@ def _resolve_credentials(
     SIGNOZ_PROFILE env var > the config file's default profile.
     """
     cfg = load_config()
+    requested = profile_name or _ROOT_PROFILE or os.getenv("SIGNOZ_PROFILE")
+    if requested and requested not in get_profiles(cfg):
+        available = ", ".join(sorted(get_profiles(cfg))) or "<none configured>"
+        raise click.UsageError(
+            f"Unknown profile '{requested}'. Available: {available}. "
+            "See 'signoz profile list'."
+        )
     selected = _selected_profile_name(profile_name)
     prof_endpoint, prof_token = get_profile_credentials(cfg, selected)
 
     resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
     resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
+    if resolved_endpoint and "://" not in resolved_endpoint:
+        # Bare "host:port" is the natural way to write a local endpoint.
+        resolved_endpoint = f"http://{resolved_endpoint}"
 
     return resolved_endpoint, resolved_token
 
