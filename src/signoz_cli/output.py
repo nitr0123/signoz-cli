@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -138,7 +139,15 @@ def _maybe_pager(fmt: str) -> Iterator[None]:
 def _spawn_pager(text: str) -> None:
     """Pipe *text* through $PAGER or `less -FRX`."""
     pager_cmd = os.getenv("PAGER") or "less"
-    args = pager_cmd.split()
+    try:
+        # shlex (not str.split) so quoted args and paths with spaces work.
+        args = shlex.split(pager_cmd, posix=True)
+    except ValueError:
+        sys.stdout.write(text)
+        return
+    if not args:
+        sys.stdout.write(text)
+        return
     if args[0] in ("less", "/usr/bin/less"):
         args += ["-FRX"]
     try:
@@ -566,7 +575,11 @@ def _print_table(
 
     if isinstance(data, list):
         if not data:
-            _write("(no results)\n")
+            # Empty-result contract: keep stdout machine-clean (JSON/YAML
+            # branches already emit []); the human notice goes to stderr.
+            if _OUTPUT_FILE:
+                _write("")
+            click.echo("(no results)", err=True)
             return
         if isinstance(data[0], dict):
             if table_keys:

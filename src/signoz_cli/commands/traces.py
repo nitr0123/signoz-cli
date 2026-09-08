@@ -11,6 +11,8 @@ from signoz_cli.commands.common import (
     _append_filter,
     _build_trace_filter,
     _common_options,
+    _flatten_field_keys,
+    _flatten_field_values,
     _get_client,
     _handle_error,
     _parse_group_by,
@@ -293,7 +295,7 @@ def traces_fields(
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_trace_available_fields(search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_keys(data)}, fmt)
     except Exception as e:
         _handle_error(e)
 
@@ -310,7 +312,7 @@ def traces_field_values(
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_trace_field_values(field_name, search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_values(data)}, fmt)
     except Exception as e:
         _handle_error(e)
 

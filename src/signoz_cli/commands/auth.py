@@ -212,6 +212,8 @@ def auth_verify(endpoint: str | None, token: str | None, fmt: str,
         client = _get_client(endpoint, token, profile)
         data = client.verify()
         try:
+            # Best-effort: version powers only the compatibility hint;
+            # transport/permission failures here must not mask verify().
             server_version = (client.get_server_version() or {}).get("version", "")
         except Exception:
             server_version = ""

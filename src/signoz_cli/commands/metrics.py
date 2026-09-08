@@ -9,6 +9,8 @@ import click
 from signoz_cli.commands.common import (
     _common_options,
     _extract_attribute_keys,
+    _flatten_field_keys,
+    _flatten_field_values,
     _get_client,
     _handle_error,
     _pagination_meta,
@@ -80,7 +82,7 @@ def metrics_fields(
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_metrics_available_fields(search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_keys(data)}, fmt)
     except Exception as e:
         _handle_error(e)
 
@@ -97,9 +99,49 @@ def metrics_field_values(
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_metrics_field_values(field_name, search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_values(data)}, fmt)
     except Exception as e:
         _handle_error(e)
+
+
+def _lookup_metric_type(client, metric_name: str) -> str | None:
+    """Return the metric's data type (Gauge/Sum/...) or None if unknown.
+
+    Never raises: metadata lookup is best-effort and must not break queries.
+    """
+    try:
+        data = client.search_metric_by_text(metric_name)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    inner = data.get("data", {})
+    keys = inner.get("attributeKeys", []) if isinstance(inner, dict) else []
+    for entry in keys:
+        if isinstance(entry, dict) and entry.get("key") == metric_name:
+            return entry.get("type")
+    return None
+
+
+def _resolve_metric_temporality(
+    client, metric_name: str, time_aggregation: str,
+    temporality: str | None, default_aggregation: str,
+) -> tuple[str, str]:
+    """Pick (time_aggregation, temporality), auto-detecting counters.
+
+    Explicit --temporality is always honoured. Otherwise rate/sum imply
+    Cumulative (as before); a default aggregation on a Sum metric is
+    upgraded to sum/Cumulative, since avg/Unspecified returns no rows
+    for counters.
+    """
+    if temporality is not None:
+        return time_aggregation, temporality
+    if time_aggregation in ("rate", "sum"):
+        return time_aggregation, "Cumulative"
+    if time_aggregation == default_aggregation:
+        if _lookup_metric_type(client, metric_name) == "Sum":
+            return "sum", "Cumulative"
+    return time_aggregation, "Unspecified"
 
 
 @metrics.command("query")
@@ -153,8 +195,9 @@ def metrics_query(
     try:
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
-        if temporality is None:
-            temporality = "Cumulative" if time_aggregation in ("rate", "sum") else "Unspecified"
+        time_aggregation, temporality = _resolve_metric_temporality(
+            client, metric_name, time_aggregation, temporality, "avg"
+        )
         group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
         payload = build_metrics_query_payload(
             s, e, metric_name,
@@ -230,8 +273,9 @@ def metrics_stats(
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="24h",
                                   profile_time_range=_profile_time_range(profile))
-        if temporality is None:
-            temporality = "Cumulative" if time_aggregation in ("rate", "sum") else "Unspecified"
+        time_aggregation, temporality = _resolve_metric_temporality(
+            client, metric_name, time_aggregation, temporality, "max"
+        )
         group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
         payload = build_metrics_stats_payload(
             s, e, metric_name,
@@ -297,7 +341,9 @@ def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
             r[agg_label] = val
             rows.append(r)
     if not rows:
-        emit("(no results)", fmt)
+        # Empty-result contract: emit a machine-readable empty payload so
+        # --json stays parseable; the human notice goes to stderr.
+        emit([], fmt)
         return
     emit(rows, fmt)
 

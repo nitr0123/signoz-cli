@@ -74,8 +74,11 @@ class TestOutputFile:
         emit([{"x": 1}], "csv")
         assert "x" in target.read_text()
 
-    def test_no_results_to_file(self, tmp_path):
+    def test_no_results_to_file(self, tmp_path, capsys):
         target = tmp_path / "out.txt"
         set_output_file(str(target))
         emit([], "table")
-        assert "no results" in target.read_text()
+        captured = capsys.readouterr()
+        assert "no results" in captured.err
+        assert "Output written" in captured.err
+        assert target.read_text() == ""

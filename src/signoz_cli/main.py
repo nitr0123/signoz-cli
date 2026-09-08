@@ -47,11 +47,13 @@ from signoz_cli.commands.common import (
     _warn_v5,
     cli,
 )
-from signoz_cli.commands.raw import query_raw
+from signoz_cli.commands.raw import promql_query, query_raw, sql_query
 
 __all__ = [
     "cli",
+    "promql_query",
     "query_raw",
+    "sql_query",
     "_add_skeleton_option",
     "_append_filter",
     "_apply_json_patch",
@@ -79,8 +81,10 @@ __all__ = [
     "_warn_v5",
 ]
 
-# Wire skeleton option to query command
+# Wire skeleton option to raw query commands
 _add_skeleton_option(query_raw)
+_add_skeleton_option(sql_query)
+_add_skeleton_option(promql_query)
 
 if __name__ == "__main__":
     cli()
