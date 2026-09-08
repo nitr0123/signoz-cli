@@ -150,3 +150,18 @@ class TestLogsTailDedup:
         # Two polls over identical data, but each body appears exactly once.
         assert result.output.count("boom one") == 1
         assert result.output.count("hello two") == 1
+
+
+class TestSkeletonOption:
+    @pytest.mark.parametrize("argv,marker", [
+        (["query", "--generate-cli-skeleton"], "compositeQuery"),
+        (["sql", "--generate-cli-skeleton"], "SELECT service.name"),
+        (["promql", "--generate-cli-skeleton"], '"type": "promql"'),
+    ])
+    def test_skeleton_prints_without_positional(self, runner, argv, marker):
+        import json as _json
+
+        result = runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        assert marker in result.output
+        _json.loads(result.output)  # must stay machine-readable

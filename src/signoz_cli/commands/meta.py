@@ -42,6 +42,8 @@ def status_cmd(endpoint: str | None, token: str | None, fmt: str,
         account = me.get("data", me) if isinstance(me, dict) else me
         server_version = ""
         try:
+            # Best-effort: version powers only display fields; failures
+            # here must not mask verify() above.
             server_version = (client.get_server_version() or {}).get("version", "")
         except Exception:
             server_version = ""

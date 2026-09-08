@@ -29,7 +29,9 @@ class TestEmit:
 
     def test_table_empty_list(self, capsys):
         emit([], "table")
-        assert "no results" in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "no results" in captured.err
+        assert captured.out == ""
 
     def test_table_key_value_for_dicts(self, capsys):
         emit({"status": "ok", "count": 3}, "table")
@@ -97,7 +99,9 @@ class TestHelpers:
 
     def test_empty_envelope_renders_no_results(self, capsys):
         emit({"status": "success", "data": {"items": [], "total": 0}}, "table")
-        assert "no results" in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "no results" in captured.err
+        assert captured.out == ""
 
     def test_scalar_list_envelope_kept(self, capsys):
         # Non-empty scalar lists under envelope keys must not be dropped.
@@ -278,3 +282,107 @@ class TestWide:
         emit(data, "wide")
         out = capsys.readouterr().out
         assert long_val in out
+
+
+class TestPagerSpawn:
+    def test_quoted_pager_args_parsed(self, monkeypatch, capsys):
+        import signoz_cli.output as _output
+
+        seen = {}
+
+        class FakeProc:
+            def communicate(self, input=None):
+                seen["input"] = input
+
+        def fake_popen(args, **kwargs):
+            seen["args"] = args
+            return FakeProc()
+
+        monkeypatch.setattr(_output.subprocess, "Popen", fake_popen)
+        monkeypatch.setenv("PAGER", 'my-pager --opt "a  b"')
+        _output._spawn_pager("hello")
+        assert seen["args"][:3] == ["my-pager", "--opt", "a  b"]
+        assert seen["input"] == b"hello"
+
+    def test_malformed_pager_falls_back_to_stdout(self, monkeypatch, capsys):
+        import signoz_cli.output as _output
+
+        monkeypatch.setenv("PAGER", 'unbalanced "quote')
+        _output._spawn_pager("hello")
+        assert capsys.readouterr().out == "hello"
+
+    def test_empty_pager_falls_back_to_stdout(self, monkeypatch, capsys):
+        import signoz_cli.output as _output
+
+        monkeypatch.setenv("PAGER", "   ")
+        _output._spawn_pager("hello")
+        assert capsys.readouterr().out == "hello"
+
+
+class TestFlattenFields:
+    def _flat(self):
+        from signoz_cli.commands.common import (
+            _flatten_field_keys,
+            _flatten_field_values,
+        )
+        return _flatten_field_keys, _flatten_field_values
+
+    def test_keys_attribute_keys_shape(self):
+        keys, _ = self._flat()
+        data = {"status": "success", "data": {"attributeKeys": [
+            {"key": "a", "type": "tag", "dataType": "string"},
+            {"key": "b", "type": "resource", "dataType": "int"},
+            "junk",
+        ]}}
+        assert keys(data) == [
+            {"key": "a", "type": "tag", "dataType": "string"},
+            {"key": "b", "type": "resource", "dataType": "int"},
+        ]
+
+    def test_keys_logs_attributes_shape(self):
+        keys, _ = self._flat()
+        data = {"status": "success", "data": {"attributes": [
+            {"key": "service.name", "type": "resource", "dataType": "string"},
+        ]}}
+        assert keys(data) == [
+            {"key": "service.name", "type": "resource", "dataType": "string"},
+        ]
+
+    def test_keys_null_and_garbage(self):
+        keys, _ = self._flat()
+        assert keys({"status": "success", "data": None}) == []
+        assert keys({"status": "success"}) == []
+        assert keys("nope") == []
+        assert keys(None) == []
+
+    def test_values_traces_shape(self):
+        _, values = self._flat()
+        data = {"status": "success", "data": {"values": {
+            "stringValues": ["a", "b"]}, "complete": True}}
+        assert values(data) == [{"value": "a"}, {"value": "b"}]
+
+    def test_values_empty_dict_shape(self):
+        _, values = self._flat()
+        assert values({"status": "success",
+                       "data": {"values": {}, "complete": True}}) == []
+
+    def test_values_logs_shape_with_nulls(self):
+        _, values = self._flat()
+        data = {"status": "success", "data": {
+            "stringAttributeValues": ["x"],
+            "numberAttributeValues": None,
+            "boolAttributeValues": [True],
+        }}
+        assert values(data) == [{"value": "x"}, {"value": True}]
+
+    def test_values_metrics_keys_shape(self):
+        _, values = self._flat()
+        data = {"status": "success", "data": {"keys": {
+            "b": [{"name": "b"}], "a": [{"name": "a"}],
+        }}}
+        assert values(data) == [{"value": "a"}, {"value": "b"}]
+
+    def test_values_garbage(self):
+        _, values = self._flat()
+        assert values(None) == []
+        assert values({"data": {"keys": [1, 2]}}) == []

@@ -117,3 +117,57 @@ class TestUnwrapTimeSeries:
     def test_warn_v5_silent_when_none(self, capsys):
         _warn_v5(_ts_response([]))
         assert capsys.readouterr().err == ""
+
+
+class _MetaFake:
+    """Fake client serving metric metadata; records whether it was consulted."""
+
+    def __init__(self, entries=None, fail=False):
+        self.entries = entries or []
+        self.fail = fail
+        self.consulted = False
+
+    def search_metric_by_text(self, text):
+        self.consulted = True
+        if self.fail:
+            raise RuntimeError("metadata backend down")
+        return {"status": "success",
+                "data": {"attributeKeys": self.entries}}
+
+
+class TestResolveMetricTemporality:
+    def _resolve(self, *args, **kwargs):
+        from signoz_cli.commands.metrics import _resolve_metric_temporality
+        return _resolve_metric_temporality(*args, **kwargs)
+
+    def test_explicit_temporality_honoured_without_lookup(self):
+        c = _MetaFake([{"key": "m", "type": "Sum"}])
+        assert self._resolve(c, "m", "avg", "Delta", "avg") == ("avg", "Delta")
+        assert not c.consulted
+
+    def test_rate_sum_imply_cumulative_without_lookup(self):
+        c = _MetaFake()
+        assert self._resolve(c, "m", "rate", None, "avg") == ("rate", "Cumulative")
+        assert self._resolve(c, "m", "sum", None, "max") == ("sum", "Cumulative")
+        assert not c.consulted
+
+    def test_sum_with_default_agg_upgraded(self):
+        c = _MetaFake([{"key": "m", "type": "Sum"}])
+        assert self._resolve(c, "m", "avg", None, "avg") == ("sum", "Cumulative")
+        assert self._resolve(c, "m", "max", None, "max") == ("sum", "Cumulative")
+
+    def test_gauge_keeps_defaults(self):
+        c = _MetaFake([{"key": "m", "type": "Gauge"}])
+        assert self._resolve(c, "m", "avg", None, "avg") == ("avg", "Unspecified")
+
+    def test_unknown_metric_keeps_defaults(self):
+        c = _MetaFake([{"key": "other", "type": "Sum"}])
+        assert self._resolve(c, "m", "avg", None, "avg") == ("avg", "Unspecified")
+
+    def test_metadata_failure_keeps_defaults(self):
+        c = _MetaFake(fail=True)
+        assert self._resolve(c, "m", "avg", None, "avg") == ("avg", "Unspecified")
+
+    def test_explicit_nondefault_agg_kept_for_sum(self):
+        c = _MetaFake([{"key": "m", "type": "Sum"}])
+        assert self._resolve(c, "m", "p95", None, "avg") == ("p95", "Unspecified")

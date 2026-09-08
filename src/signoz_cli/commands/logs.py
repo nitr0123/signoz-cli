@@ -12,6 +12,8 @@ from signoz_cli.commands.common import (
     _VALID_AGGREGATIONS,
     _build_log_filter,
     _common_options,
+    _flatten_field_keys,
+    _flatten_field_values,
     _get_client,
     _handle_error,
     _logs_query_all,
@@ -243,7 +245,7 @@ def logs_fields(endpoint: str | None, token: str | None, fmt: str,
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_logs_available_fields(search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_keys(data)}, fmt)
     except Exception as e:
         _handle_error(e)
 
@@ -260,7 +262,7 @@ def logs_field_values(
     try:
         client = _get_client(endpoint, token, profile)
         data = client.get_logs_field_values(field_name, search)
-        emit(data, fmt)
+        emit({"data": _flatten_field_values(data)}, fmt)
     except Exception as e:
         _handle_error(e)
 

@@ -235,6 +235,28 @@ class TestEmptyResults:
         assert result.exit_code == 0, result.output
         assert "Warning: no points" in result.output
 
+    def test_metrics_stats_empty_json_stays_parseable(self, runner, monkeypatch):
+        import json as _json
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "scalar",
+                        "data": {"results": [{"queryName": "A",
+                                             "columns": None, "data": []}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["metrics", "stats", "some.counter", "--json"])
+        assert result.exit_code == 0, result.output
+        # Contract: empty JSON output must be a parseable empty payload,
+        # never a "(no results)" string (breaks `| jq` consumers).
+        assert _json.loads(result.stdout) == []
+
     def test_alerts_history_empty_says_no_results(self, runner, monkeypatch):
         class Fake:
             def __init__(self, *a, **k):
@@ -483,3 +505,20 @@ class TestAlertsTestValidation:
         result = runner.invoke(cli, ["alerts", "test", str(pf)])
         assert result.exit_code == 2, result.output
         assert "JSON object" in result.output
+
+
+class TestStaleProfileRange:
+    def test_bad_stored_range_names_profile_and_key(self, runner):
+        from signoz_cli.config import load_config, save_config
+
+        cfg = load_config()
+        cfg.setdefault("profiles", {}).setdefault("stale", {}).update({
+            "endpoint": "http://x:1",
+            "token": "tok",
+            "default_time_range": "24hours",
+        })
+        save_config(cfg)
+        result = runner.invoke(cli, ["traces", "search", "-p", "stale"])
+        assert result.exit_code == 2, result.output
+        assert "default_time_range" in result.output
+        assert "stale" in result.output

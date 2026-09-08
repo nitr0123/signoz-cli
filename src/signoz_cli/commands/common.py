@@ -34,6 +34,7 @@ from signoz_cli.output import (
     set_wide,
 )
 from signoz_cli.query import build_logs_query_payload, build_traces_query_payload
+from signoz_cli.timeutil import parse_time_range
 
 _VALID_AGGREGATIONS = [
     "count",
@@ -215,10 +216,24 @@ def _resolve_credentials(
 
 
 def _profile_time_range(profile_name: str | None) -> str | None:
-    """Return the profile's default_time_range, or None if not configured."""
+    """Return the profile's default_time_range, or None if not configured.
+
+    Values persisted by older releases are validated here so a stale typo
+    fails with the profile/key named instead of a generic range error.
+    """
     cfg = load_config()
     selected = _selected_profile_name(profile_name)
     val: str | None = get_profile_option(cfg, selected, "default_time_range")
+    if val:
+        try:
+            parse_time_range(val)
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid default_time_range {val!r} on profile "
+                f"'{selected}'. Fix with: signoz configure -p {selected} "
+                "--endpoint <url> --token <key> --default-time-range <range> "
+                "(e.g. 24h)."
+            ) from None
     return val
 
 
@@ -886,6 +901,65 @@ def _extract_attribute_keys(data: Any) -> list[Any]:
     return []
 
 
+def _flatten_field_keys(data: Any) -> list[dict[str, Any]]:
+    """Normalize fields responses to [{key, type, dataType}] rows.
+
+    Shapes differ per signal: metrics/traces use ``data.attributeKeys``,
+    logs uses ``data.attributes``. Explicit nulls and unknown shapes yield
+    no rows (rendered as "(no results)") instead of a dict-repr cell.
+    """
+    if not isinstance(data, dict):
+        return []
+    inner = data.get("data", {})
+    if not isinstance(inner, dict):
+        return []
+    entries = inner.get("attributeKeys") or inner.get("attributes") or []
+    if not isinstance(entries, list):
+        return []
+    return [
+        {
+            "key": e.get("key", ""),
+            "type": e.get("type", ""),
+            "dataType": e.get("dataType", ""),
+        }
+        for e in entries
+        if isinstance(e, dict)
+    ]
+
+
+def _flatten_field_values(data: Any) -> list[dict[str, Any]]:
+    """Normalize field-values responses to [{value}] rows.
+
+    Shapes differ per signal: traces nests ``data.values.*Values`` lists,
+    logs uses ``data.{string,number,bool}AttributeValues``, metrics maps
+    ``data.keys`` attribute names to descriptors. Explicit nulls and
+    unknown shapes yield no rows.
+    """
+    if not isinstance(data, dict):
+        return []
+    inner = data.get("data", {})
+    if not isinstance(inner, dict):
+        return []
+    values: list[Any] = []
+    nested = inner.get("values")
+    if isinstance(nested, dict):
+        for key, val in nested.items():
+            if key.lower().endswith("values") and isinstance(val, list):
+                values.extend(val)
+    for key in (
+        "stringAttributeValues",
+        "numberAttributeValues",
+        "boolAttributeValues",
+    ):
+        val = inner.get(key)
+        if isinstance(val, list):
+            values.extend(val)
+    keys_map = inner.get("keys")
+    if isinstance(keys_map, dict):
+        values.extend(sorted(keys_map))
+    return [{"value": v} for v in values]
+
+
 def _extract_alerts(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
@@ -987,6 +1061,30 @@ def _skeleton_callback(
                 "ORDER BY cnt DESC "
                 "LIMIT 10"
             )
+        }
+    elif cmd_name == "promql":
+        skeleton = {
+            "schemaVersion": "v1",
+            "start": 0,
+            "end": 0,
+            "requestType": "time_series",
+            "compositeQuery": {
+                "queries": [
+                    {
+                        "type": "promql",
+                        "spec": {
+                            "name": "A",
+                            "query": "sum(rate(http_server_requests_total[5m]))",
+                            "step": 60,
+                        },
+                    }
+                ]
+            },
+            "formatOptions": {
+                "formatTableResultForUI": False,
+                "fillGaps": False,
+            },
+            "variables": {},
         }
     else:
         skeleton = {"_note": f"No skeleton template for command '{cmd_name}'."}
