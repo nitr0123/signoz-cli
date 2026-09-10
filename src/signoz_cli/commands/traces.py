@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import click
 
+from signoz_cli.client import SigNozApiError
 from signoz_cli.commands.common import (
     _NO_FIELD_AGGREGATIONS,
     _TRACE_TABLE_KEYS,
@@ -26,7 +29,7 @@ from signoz_cli.commands.common import (
 )
 from signoz_cli.output import emit
 from signoz_cli.query import build_aggregate_query_payload, build_traces_query_payload
-from signoz_cli.timeutil import resolve_timestamps
+from signoz_cli.timeutil import parse_time_range, resolve_timestamps
 
 
 @cli.group()
@@ -365,3 +368,80 @@ def traces_detail(
         _handle_error(ex)
 
 
+
+
+@traces.command("tail")
+@_common_options
+@click.option("--service", default=None, help="Service name filter.")
+@click.option("--operation", default=None, help="Operation name filter.")
+@click.option("--interval", type=float, default=3.0, show_default=True,
+              help="Poll interval in seconds.")
+@click.option("--window", default="30s", show_default=True,
+              help="Look-back window per poll.")
+def traces_tail(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    service: str | None,
+    operation: str | None,
+    interval: float,
+    window: str,
+) -> None:
+    """Follow new spans as they arrive (poll-based; Ctrl-C to stop)."""
+    import time as _time
+
+    if interval <= 0:
+        raise click.UsageError("--interval must be positive (seconds between polls).")
+    try:
+        client = _get_client(endpoint, token, profile)
+    except Exception as ex:
+        _handle_error(ex)
+        return
+
+    filter_expr = _build_trace_filter(None, service, operation, None)
+    seen: OrderedDict[str, None] = OrderedDict()
+    click.echo("Tailing traces... Ctrl-C to stop.", err=True)
+    try:
+        while True:
+            now_ms = int(_time.time() * 1000)
+            win_ms = parse_time_range(window)
+            payload = build_traces_query_payload(
+                now_ms - win_ms, now_ms, filter_expr, limit=100
+            )
+            try:
+                rows = _unwrap_v5(client.query_builder_v5(payload))
+            except SigNozApiError as ex:
+                if ex.status_code in (400, 401, 403, 404):
+                    _handle_error(ex)
+                    return
+                click.echo(f"tail: {ex} (retrying)", err=True)
+                _time.sleep(interval)
+                continue
+            except Exception as ex:
+                click.echo(f"tail: {ex} (retrying)", err=True)
+                _time.sleep(interval)
+                continue
+            if isinstance(rows, list):
+                for row in reversed(rows):  # oldest first
+                    if not isinstance(row, dict):
+                        continue
+                    key = f"{row.get('traceID', '')}|{row.get('spanID', '')}"
+                    if key in seen:
+                        continue
+                    seen[key] = None
+                    try:
+                        dur_ms = float(row.get("durationNano") or 0) / 1e6
+                    except (TypeError, ValueError):
+                        dur_ms = 0.0
+                    click.echo(
+                        f"{row.get('timestamp', '') or ''} "
+                        f"{row.get('service.name', '') or ''} "
+                        f"{row.get('name', '') or ''} "
+                        f"{dur_ms:.2f}ms {row.get('traceID', '') or ''}"
+                    )
+            while len(seen) > 50000:
+                seen.popitem(last=False)
+            _time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("Stopped.", err=True)

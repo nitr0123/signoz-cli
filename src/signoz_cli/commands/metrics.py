@@ -348,3 +348,75 @@ def _emit_scalar_stats(data: dict[str, Any], fmt: str) -> None:
     emit(rows, fmt)
 
 
+
+
+@metrics.command("top")
+@_common_options
+@click.argument("metric_name")
+@click.option("--top", "top_n", type=int, default=10, show_default=True,
+              help="Show the top N series.")
+@click.option("--group-by", default=None, help="Comma-separated attribute keys.")
+@click.option("--filter", "filter_expr", default="", help="Filter expression.")
+@_time_options(default_range="1h")
+def metrics_top(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    metric_name: str,
+    top_n: int,
+    group_by: str | None,
+    filter_expr: str,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Rank series by latest value (sum over the window, Cumulative).
+
+    Uses sum/Cumulative fixed: this ranks by total volume, not by gauge
+    level. For other aggregations use `metrics query` with --json and sort.
+    """
+    if top_n <= 0:
+        raise click.UsageError("--top must be positive.")
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
+        group_by_fields = [g.strip() for g in group_by.split(",") if g.strip()] if group_by else []
+        payload = build_metrics_query_payload(
+            s, e, metric_name,
+            temporality="Cumulative",
+            time_aggregation="sum",
+            space_aggregation="sum",
+            group_by=group_by_fields,
+            filter_expression=filter_expr,
+            step_interval=60,
+        )
+        resp = client.query_builder_v5(payload)
+        _warn_v5(resp)
+        rows = _unwrap_time_series(resp)
+        # No empty-metrics hint here: top already queries sum/Cumulative,
+        # so the generic counters hint would mislead.
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            series = str(row.get("series", ""))
+            ts = row.get("timestamp")
+            # Tolerant ordering key: numbers sort naturally, anything else
+            # falls back to string order instead of raising on mixed types.
+            order = (0, ts) if isinstance(ts, (int, float)) else (1, str(ts))
+            prev = latest.get(series)
+            prev_order = prev["_order"] if prev else None
+            if prev is None or (prev_order is not None and order > prev_order):
+                latest[series] = {"series": series, "timestamp": ts,
+                                  "value": row.get("value"), "_order": order}
+        ranked = sorted(
+            latest.values(),
+            key=lambda r: (r["value"] is None,
+                           -(r["value"] or 0) if isinstance(r["value"], (int, float)) else 0,
+                           str(r["value"])),
+        )
+        out = [{k: r[k] for k in ("series", "timestamp", "value")} for r in ranked[:top_n]]
+        emit(out, fmt, table_keys=["series", "timestamp", "value"])
+    except Exception as ex:
+        _handle_error(ex)

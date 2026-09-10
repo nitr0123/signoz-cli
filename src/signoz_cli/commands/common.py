@@ -16,6 +16,7 @@ import httpx
 from signoz_cli import __version__
 from signoz_cli.client import SigNozApiError, SigNozClient
 from signoz_cli.config import (
+    CONFIG_DIR,
     get_profile_credentials,
     get_profile_option,
     get_profiles,
@@ -563,6 +564,58 @@ def cli(ctx: click.Context, root_profile: str | None) -> None:
     global _ROOT_PROFILE
     _ROOT_PROFILE = root_profile
     ctx.ensure_object(dict)
+    # Full argv (not ctx.args, which drops already-parsed global flags
+    # like -p that rerun needs to reproduce the invocation).
+    _record_history(sys.argv[1:])
+
+
+_QUERY_HISTORY_COMMANDS = {"logs", "traces", "metrics", "query", "promql", "sql"}
+_QUERY_HISTORY_LIMIT = 100
+
+
+def _history_path():
+    """History file lives next to the config (isolated in tests via CONFIG_DIR)."""
+    from pathlib import Path
+
+    return Path(CONFIG_DIR) / "history.json"
+
+
+def _read_history() -> list[dict[str, Any]]:
+    """Read recorded query invocations (newest last); never raises."""
+    try:
+        data = json.loads(_history_path().read_text())
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _record_history(args: list[str]) -> None:
+    """Append a query invocation to the local history (best-effort).
+
+    Only the read/query roots are recorded, and never --help runs.
+    Invocations carrying `--token` are never recorded: persisting raw
+    secrets to disk (and echoing them in `history`) would leak them.
+    Must never break the invoked command.
+    """
+    try:
+        if not args or args[0] not in _QUERY_HISTORY_COMMANDS:
+            return
+        if "-h" in args or "--help" in args:
+            return
+        if "--token" in args:
+            return
+        import datetime
+
+        entries = _read_history()
+        entries.append({
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "argv": list(args),
+        })
+        path = _history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
+    except Exception:
+        pass
 
 
 def _unwrap_time_series(data: Any) -> list[dict[str, Any]]:

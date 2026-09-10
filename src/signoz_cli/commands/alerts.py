@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from signoz_cli.client import SigNozApiError
 from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
@@ -362,3 +363,61 @@ def alerts_diff(
             click.echo("(no changes)")
     except Exception as e:
         _handle_error(e)
+
+
+@alerts.command("watch")
+@_common_options
+@click.option("--interval", type=float, default=10.0, show_default=True,
+              help="Poll interval in seconds.")
+def alerts_watch(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, interval: float,
+) -> None:
+    """Watch for firing alerts, printing each one once (Ctrl-C to stop)."""
+    import time as _time
+    from collections import OrderedDict
+
+    if interval <= 0:
+        raise click.UsageError("--interval must be positive (seconds between polls).")
+    try:
+        client = _get_client(endpoint, token, profile)
+    except Exception as ex:
+        _handle_error(ex)
+        return
+
+    seen: OrderedDict[str, None] = OrderedDict()
+    click.echo("Watching alerts... Ctrl-C to stop.", err=True)
+    try:
+        while True:
+            try:
+                alerts_data = _extract_alerts(client.list_alerts())
+            except SigNozApiError as ex:
+                if ex.status_code in (400, 401, 403, 404):
+                    _handle_error(ex)
+                    return
+                click.echo(f"watch: {ex} (retrying)", err=True)
+                _time.sleep(interval)
+                continue
+            except Exception as ex:
+                click.echo(f"watch: {ex} (retrying)", err=True)
+                _time.sleep(interval)
+                continue
+            if isinstance(alerts_data, list):
+                for alert in alerts_data:
+                    if not isinstance(alert, dict):
+                        continue
+                    key = f"{alert.get('ruleId', '')}|{alert.get('startsAt', '')}"
+                    if key in seen:
+                        continue
+                    seen[key] = None
+                    click.echo(
+                        f"{alert.get('startsAt', '') or ''} "
+                        f"{alert.get('severity', '') or ''} "
+                        f"{alert.get('alertname', '') or ''} "
+                        f"[{alert.get('state', '') or ''}]"
+                    )
+            while len(seen) > 50000:
+                seen.popitem(last=False)
+            _time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("Stopped.", err=True)

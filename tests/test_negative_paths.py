@@ -800,3 +800,305 @@ class TestBundleNormalize:
         doc = {"id": "r1", "alert": "R", "source": "logs",
                "createdAt": "t"}
         assert _strip_volatile(doc) == {"alert": "R", "source": "logs"}
+
+
+class TestTracesTail:
+    def test_prints_new_spans_once(self, runner, monkeypatch):
+        import time as _t
+
+        rows = [
+            {"traceID": "t1", "spanID": "s1", "timestamp": "2024-01-01",
+             "service.name": "svc", "name": "op", "durationNano": 1000},
+            {"traceID": "t2", "spanID": "s2", "timestamp": "2024-01-02",
+             "service.name": "svc", "name": "op", "durationNano": 2000},
+        ]
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "raw", "data": {
+                    "results": [{"queryName": "A",
+                                 "rows": [{"data": r} for r in rows]}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        calls = {"n": 0}
+
+        def fake_sleep(_seconds):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(_t, "sleep", fake_sleep)
+        result = runner.invoke(cli, ["traces", "tail", "--service", "svc"])
+        assert result.exit_code == 0, result.output
+        assert result.output.count("t1") == 1
+        assert result.output.count("t2") == 1
+
+    def test_tail_auth_failure_exits(self, runner, monkeypatch):
+        from signoz_cli.client import SigNozApiError
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                raise SigNozApiError(403, "forbidden")
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["traces", "tail"])
+        assert result.exit_code == 1
+        assert "403" in result.output
+
+    def test_tail_interval_zero_rejected(self, runner):
+        result = runner.invoke(cli, ["traces", "tail", "--interval", "0"])
+        assert result.exit_code == 2
+
+
+class TestAlertsWatch:
+    def test_prints_new_alerts_once(self, runner, monkeypatch):
+        import time as _t
+
+        alerts = [
+            {"alertname": "HighErr", "ruleId": "r1", "severity": "critical",
+             "startsAt": "2024-01-01", "state": "firing"},
+        ]
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def list_alerts(self):
+                return {"status": "success", "data": [
+                    {"labels": {"alertname": a["alertname"],
+                                "ruleId": a["ruleId"],
+                                "severity": a["severity"]},
+                     "status": {"state": a["state"]},
+                     "startsAt": a["startsAt"], "endsAt": ""}
+                    for a in alerts]}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        calls = {"n": 0}
+
+        def fake_sleep(_seconds):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(_t, "sleep", fake_sleep)
+        result = runner.invoke(cli, ["alerts", "watch"])
+        assert result.exit_code == 0, result.output
+        assert result.output.count("HighErr") == 1
+
+    def test_watch_auth_failure_exits(self, runner, monkeypatch):
+        from signoz_cli.client import SigNozApiError
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def list_alerts(self):
+                raise SigNozApiError(401, "unauthorized")
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "watch"])
+        assert result.exit_code == 1
+        assert "401" in result.output
+
+
+class TestMetricsTop:
+    def _install(self, monkeypatch):
+        response = {
+            "status": "success",
+            "data": {
+                "type": "time_series",
+                "data": {
+                    "results": [
+                        {
+                            "queryName": "A",
+                            "aggregations": [
+                                {
+                                    "index": 0,
+                                    "alias": "__r",
+                                    "series": [
+                                        {"labels": [{"key": "s", "value": "small"}],
+                                         "values": [{"timestamp": 2,
+                                                     "value": 5.0}]},
+                                        {"labels": [{"key": "s", "value": "big"}],
+                                         "values": [{"timestamp": 2,
+                                                     "value": 50.0}]},
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
+        }
+
+        class Fake:
+            def __init__(self, *a, **k):
+                self.captured = None
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload, _response=response):
+                self.captured = payload
+                return _response
+
+        fake = Fake()
+        monkeypatch.setattr(cm, "SigNozClient", lambda *a, **k: fake)
+        return fake
+
+    def test_ranks_by_latest_value(self, runner, monkeypatch):
+        import json as _json
+
+        self._install(monkeypatch)
+        result = runner.invoke(cli, ["metrics", "top", "m", "--json"])
+        assert result.exit_code == 0, result.output
+        rows = _json.loads(result.stdout)
+        assert [r["series"] for r in rows] == ["s=big", "s=small"]
+
+    def test_top_n_limits(self, runner, monkeypatch):
+        import json as _json
+
+        self._install(monkeypatch)
+        result = runner.invoke(cli, ["metrics", "top", "m", "--top", "1", "--json"])
+        assert result.exit_code == 0, result.output
+        assert len(_json.loads(result.stdout)) == 1
+
+    def test_top_validates_n(self, runner):
+        result = runner.invoke(cli, ["metrics", "top", "m", "--top", "0"])
+        assert result.exit_code == 2
+
+
+class TestHistory:
+    def test_records_query_invocations(self, runner, monkeypatch, tmp_path):
+        import json as _json
+        import sys as _sys
+
+        from signoz_cli.config import CONFIG_FILE  # noqa: F401
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            _sys, "argv",
+            ["signoz", "logs", "search", "--service", "svc"])
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "raw",
+                        "data": {"results": [{"queryName": "A", "rows": []}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["logs", "search", "--service", "svc"])
+        assert result.exit_code == 0, result.output
+        entries = _json.loads((tmp_path / "history.json").read_text())
+        assert entries[-1]["argv"] == ["logs", "search", "--service", "svc"]
+
+    def test_help_not_recorded(self, runner, monkeypatch, tmp_path):
+        import sys as _sys
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            _sys, "argv", ["signoz", "logs", "search", "--help"])
+        runner.invoke(cli, ["logs", "search", "--help"])
+        assert not (tmp_path / "history.json").exists()
+
+    def test_rerun_executes_recorded_argv(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        (tmp_path / "history.json").write_text(_json.dumps([
+            {"ts": "t", "argv": ["traces", "search", "--limit", "3"]},
+        ]))
+        seen = {}
+        monkeypatch.setattr(
+            "os.execvp",
+            lambda prog, args: seen.update(prog=prog, args=args),
+        )
+        result = runner.invoke(cli, ["rerun", "0"])
+        assert result.exit_code == 0, result.output
+        assert seen == {"prog": "signoz",
+                        "args": ["signoz", "traces", "search", "--limit", "3"]}
+
+    def test_rerun_bad_index(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        (tmp_path / "history.json").write_text(_json.dumps([]))
+        result = runner.invoke(cli, ["rerun", "5"])
+        assert result.exit_code != 0
+
+    def test_history_clear(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        (tmp_path / "history.json").write_text(_json.dumps(
+            [{"ts": "t", "argv": ["x"]}]))
+        result = runner.invoke(cli, ["history", "--clear"])
+        assert result.exit_code == 0, result.output
+        assert not (tmp_path / "history.json").exists()
+
+
+class TestHistorySecrets:
+    def test_token_invocations_never_recorded(self, runner, monkeypatch, tmp_path):
+        import sys as _sys
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            _sys, "argv",
+            ["signoz", "logs", "search", "--token", "SUPERSECRET"])
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {"type": "raw",
+                        "data": {"results": [{"queryName": "A", "rows": []}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["logs", "search", "--token", "x"])
+        assert result.exit_code == 0, result.output
+        assert not (tmp_path / "history.json").exists()
