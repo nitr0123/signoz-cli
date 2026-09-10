@@ -385,3 +385,34 @@ class TestIdempotentRetry:
         calls, handler = self._counting([503, 200], monkeypatch)
         make_client(handler).update_channel("c1", {"name": "x"})
         assert calls["n"] == 2
+
+
+class TestSavedViewsPaths:
+    """Saved views live under /api/v1/explorer/views (v1/saved_views is gone)."""
+
+    def test_list_uses_explorer_path(self):
+        seen = {}
+
+        def handler(request):
+            seen["path"] = request.url.path
+            seen["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"status": "success", "data": []})
+
+        make_client(handler).list_saved_views("traces")
+        assert seen["path"] == "/api/v1/explorer/views"
+        assert seen["params"].get("sourcePage") == "traces"
+
+    def test_crud_paths(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.method, request.url.path))
+            return httpx.Response(200, json={"status": "success", "data": {}})
+
+        c = make_client(handler)
+        c.get_saved_view("abc")
+        c.create_saved_view({"name": "x"})
+        c.delete_saved_view("abc")
+        assert ("GET", "/api/v1/explorer/views/abc") in seen
+        assert ("POST", "/api/v1/explorer/views") in seen
+        assert ("DELETE", "/api/v1/explorer/views/abc") in seen

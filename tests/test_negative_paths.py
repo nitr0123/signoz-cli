@@ -522,3 +522,52 @@ class TestStaleProfileRange:
         assert result.exit_code == 2, result.output
         assert "default_time_range" in result.output
         assert "stale" in result.output
+
+
+class TestCrudCompletion:
+    def test_views_create_posts_payload(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def create_saved_view(self, view):
+                calls["view"] = view
+                return {"status": "success", "data": {"id": "v1"}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        pf = tmp_path / "view.json"
+        pf.write_text(_json.dumps({"name": "v", "sourcePage": "logs"}))
+        result = runner.invoke(cli, ["views", "create", str(pf), "--json"])
+        assert result.exit_code == 0, result.output
+        assert calls["view"] == {"name": "v", "sourcePage": "logs"}
+        assert "v1" in result.output
+
+    def test_channels_update_puts_payload(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def update_channel(self, channel_id, channel):
+                calls["update"] = (channel_id, channel)
+                return {"status": "success"}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        pf = tmp_path / "ch.json"
+        pf.write_text(_json.dumps({"name": "c"}))
+        result = runner.invoke(cli, ["channels", "update", "ch1", str(pf), "--json"])
+        assert result.exit_code == 0, result.output
+        assert calls["update"] == ("ch1", {"name": "c"})

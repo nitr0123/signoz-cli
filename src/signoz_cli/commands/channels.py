@@ -59,6 +59,22 @@ def channels_create(endpoint: str | None, token: str | None, fmt: str,
         _handle_error(e)
 
 
+@channels.command("update")
+@_common_options
+@click.argument("channel_id")
+@click.argument("json_file", type=click.Path())
+def channels_update(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, channel_id: str, json_file: str) -> None:
+    """Replace a channel from a JSON file (full PUT)."""
+    try:
+        channel = _read_json(json_file)
+        client = _get_client(endpoint, token, profile)
+        data = client.update_channel(channel_id, channel)
+        emit(data or {"status": "updated"}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
 @channels.command("delete")
 @_common_options
 @click.argument("channel_id")

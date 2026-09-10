@@ -372,16 +372,18 @@ class SigNozClient:
     # ------------------------------------------------------------------
 
     def list_saved_views(self, source_page: str = "logs") -> Any:
-        return self._get("/api/v1/saved_views", params={"sourcePage": source_page})
+        # NOTE: /api/v1/saved_views is gone on 0.138+ (SPA fallback page);
+        # the explorer views family is the working path on both versions.
+        return self._get("/api/v1/explorer/views", params={"sourcePage": source_page})
 
     def get_saved_view(self, view_id: str) -> Any:
-        return self._get(f"/api/v1/saved_views/{view_id}")
+        return self._get(f"/api/v1/explorer/views/{view_id}")
 
     def create_saved_view(self, view: dict[str, Any]) -> Any:
-        return self._post("/api/v1/saved_views", json_body=view, idempotent=False)
+        return self._post("/api/v1/explorer/views", json_body=view, idempotent=False)
 
     def delete_saved_view(self, view_id: str) -> Any:
-        resp = self._request("DELETE", f"/api/v1/saved_views/{view_id}")
+        resp = self._request("DELETE", f"/api/v1/explorer/views/{view_id}")
         return self._parse(resp, allow_empty=True)
 
     # ------------------------------------------------------------------
