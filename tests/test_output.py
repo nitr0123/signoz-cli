@@ -386,3 +386,43 @@ class TestFlattenFields:
         _, values = self._flat()
         assert values(None) == []
         assert values({"data": {"keys": [1, 2]}}) == []
+
+
+class TestEmptyContract:
+    """Empty results stay machine-readable per format (report H1/H2)."""
+
+    def test_empty_json_is_parseable_list(self, capsys):
+        import json as _json
+
+        emit([], "json")
+        assert _json.loads(capsys.readouterr().out) == []
+
+    def test_empty_yaml_is_parseable(self, capsys):
+        import yaml as _yaml
+
+        emit([], "yaml")
+        out = capsys.readouterr().out
+        assert _yaml.safe_load(out) in ([], None, "")
+
+    def test_empty_table_and_wide_notice_on_stderr(self, capsys):
+        for fmt in ("table", "wide"):
+            emit([], fmt)
+            captured = capsys.readouterr()
+            assert "no results" in captured.err
+            assert captured.out == ""
+
+    def test_empty_custom_columns_notice_on_stderr(self, capsys):
+        set_custom_columns(["a:b"])
+        try:
+            emit([], "table")
+            captured = capsys.readouterr()
+            assert "no results" in captured.err
+        finally:
+            set_custom_columns(None)
+
+    def test_empty_csv_rejected(self):
+        import click as _click
+        import pytest as _pytest
+
+        with _pytest.raises(_click.UsageError):
+            emit([], "csv")

@@ -8,7 +8,9 @@ from signoz_cli.commands.common import (
     _common_options,
     _get_client,
     _handle_error,
+    _history_path,
     _is_supported_server,
+    _read_history,
     _selected_profile_name,
     cli,
 )
@@ -274,3 +276,55 @@ Common fields:
     click.echo(content)
 
 
+
+
+@cli.command("history")
+@click.option("--clear", is_flag=True, help="Erase the recorded query history.")
+def history_cmd(clear: bool) -> None:
+    """List recent query invocations (newest last with their index)."""
+    try:
+        if clear:
+            try:
+                _history_path().unlink(missing_ok=True)
+            except OSError as ex:
+                raise click.UsageError(f"Cannot clear history: {ex}") from None
+            click.echo("History cleared.")
+            return
+        entries = _read_history()
+        emit(
+            [
+                {"index": i, "ts": e.get("ts", ""), "command": "signoz " + " ".join(e.get("argv", []))}
+                for i, e in enumerate(entries)
+            ],
+            "table",
+        )
+    except Exception as e:
+        _handle_error(e)
+
+
+@cli.command("rerun")
+@click.argument("index", type=int)
+def rerun_cmd(index: int) -> None:
+    """Re-execute a recorded query by its `history` index (replaces process)."""
+    try:
+        entries = _read_history()
+        if not entries:
+            raise click.UsageError("No recorded history yet.")
+        if index < 0 or index >= len(entries):
+            raise click.UsageError(
+                f"Index {index} out of range (0..{len(entries) - 1}). "
+                "See 'signoz history'."
+            )
+        argv = entries[index].get("argv", [])
+        if not argv:
+            raise click.UsageError(f"History entry {index} has no command.")
+        import os as _os
+
+        try:
+            _os.execvp("signoz", ["signoz", *argv])
+        except OSError as ex:
+            raise click.UsageError(
+                f"Cannot re-execute (signoz not on PATH?): {ex}"
+            ) from None
+    except Exception as e:
+        _handle_error(e)
