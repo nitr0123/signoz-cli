@@ -571,3 +571,232 @@ class TestCrudCompletion:
         result = runner.invoke(cli, ["channels", "update", "ch1", str(pf), "--json"])
         assert result.exit_code == 0, result.output
         assert calls["update"] == ("ch1", {"name": "c"})
+
+
+class TestBundle:
+    def _client(self, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        calls = {"create": [], "update": [], "delete": []}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                self.endpoint = a[0] if a else ""
+
+            def close(self):
+                pass
+
+            def get_server_version(self):
+                return {"version": "v0.138.0"}
+
+            def list_dashboards_v2(self, limit=None, offset=None, query=None):
+                return {"status": "success",
+                        "data": {"dashboards": [
+                            {"id": "d1", "name": "Dash",
+                             "createdAt": "t", "orgId": "o"}], "total": 1}}
+
+            def list_rules(self):
+                return {"status": "success",
+                        "data": {"rules": [
+                            {"id": "r1", "alert": "Rule",
+                             "createdAt": "t"}]}}
+
+            def list_channels(self):
+                return {"status": "success", "data": []}
+
+            def list_saved_views(self, source_page="logs"):
+                return {"status": "success", "data": []}
+
+            def get_dashboard_v2(self, dashboard_id):
+                return {"status": "success",
+                        "data": {"id": "d1", "name": "Dash", "createdAt": "t"}}
+
+            def get_alert(self, rule_id):
+                return {"status": "success",
+                        "data": {"id": "r1", "alert": "Rule", "createdAt": "t"}}
+
+            def get_channel(self, channel_id):
+                return {"status": "success",
+                        "data": {"id": "ch1", "name": "Ch"}}
+
+            def get_saved_view(self, view_id):
+                return {"status": "success",
+                        "data": {"id": "v1", "name": "V"}}
+
+            def create_dashboard_v2(self, doc):
+                calls["create"].append(("dashboards", doc))
+                return {"status": "success", "data": {"id": "d9"}}
+
+            def update_dashboard_v2(self, dashboard_id, doc):
+                calls["update"].append(("dashboards", dashboard_id, doc))
+                return {"status": "success"}
+
+            def create_rule(self, doc):
+                calls["create"].append(("alerts", doc))
+                return {"status": "success", "data": {"id": "r9"}}
+
+            def update_rule(self, rule_id, doc):
+                calls["update"].append(("alerts", rule_id, doc))
+                return {"status": "success"}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        return calls
+
+    def test_export_writes_files_and_manifest(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        self._client(monkeypatch)
+        target = tmp_path / "backup"
+        result = runner.invoke(cli, ["export", str(target), "--yes"])
+        assert result.exit_code == 0, result.output
+        manifest = _json.loads((target / "manifest.json").read_text())
+        assert manifest["counts"] == {"dashboards": 1, "alerts": 1,
+                                      "channels": 0, "views": 0}
+        assert manifest["server_version"] == "v0.138.0"
+        assert "exported_from" in manifest
+        dash_files = list((target / "dashboards").glob("*.json"))
+        assert len(dash_files) == 1
+        assert "Dash" in dash_files[0].name
+
+    def test_import_dry_run_calls_nothing(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = self._client(monkeypatch)
+        target = tmp_path / "backup"
+        (target / "dashboards").mkdir(parents=True)
+        (target / "dashboards" / "Dash.d1.json").write_text(
+            _json.dumps({"id": "d1", "name": "Dash"}))
+        result = runner.invoke(cli, ["import", str(target), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert calls == {"create": [], "update": [], "delete": []}
+        assert "skipped" in result.output  # name clash with server Dash
+
+    def test_import_creates_new_items(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = self._client(monkeypatch)
+        target = tmp_path / "backup"
+        (target / "dashboards").mkdir(parents=True)
+        (target / "dashboards" / "New.zz.json").write_text(
+            _json.dumps({"name": "New", "createdAt": "t", "orgId": "o"}))
+        result = runner.invoke(cli, ["import", str(target), "--yes"])
+        assert result.exit_code == 0, result.output
+        assert calls["create"] == [("dashboards", {"name": "New"})]
+        assert "created" in result.output
+
+    def test_import_conflict_fail(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        self._client(monkeypatch)
+        target = tmp_path / "backup"
+        (target / "dashboards").mkdir(parents=True)
+        (target / "dashboards" / "Dash.d1.json").write_text(
+            _json.dumps({"id": "d1", "name": "Dash"}))
+        result = runner.invoke(
+            cli, ["import", str(target), "--yes", "--on-conflict", "fail"])
+        assert result.exit_code != 0
+        assert "Conflict" in result.output
+
+    def test_import_overwrite_updates(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = self._client(monkeypatch)
+        target = tmp_path / "backup"
+        (target / "dashboards").mkdir(parents=True)
+        (target / "dashboards" / "Dash.d1.json").write_text(
+            _json.dumps({"id": "d1", "name": "Dash", "createdAt": "t"}))
+        result = runner.invoke(
+            cli, ["import", str(target), "--yes", "--on-conflict", "overwrite"])
+        assert result.exit_code == 0, result.output
+        assert calls["update"] == [("dashboards", "d1", {"name": "Dash"})]
+        assert "overwritten" in result.output
+
+    def test_dashboards_diff_shows_changes(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        self._client(monkeypatch)
+        pf = tmp_path / "dash.json"
+        pf.write_text(_json.dumps({"id": "d1", "name": "Changed",
+                                   "createdAt": "other"}))
+        result = runner.invoke(cli, ["dashboards", "diff", "d1", str(pf)])
+        assert result.exit_code == 0, result.output
+        assert "-  \"name\": \"Dash\"" in result.output
+        assert "+  \"name\": \"Changed\"" in result.output
+
+    def test_dashboards_diff_no_changes(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        self._client(monkeypatch)
+        pf = tmp_path / "dash.json"
+        pf.write_text(_json.dumps({"id": "DIFFERENT", "name": "Dash",
+                                   "createdAt": "other"}))
+        result = runner.invoke(cli, ["dashboards", "diff", "d1", str(pf)])
+        assert result.exit_code == 0, result.output
+        assert "no changes" in result.output
+
+    def test_alerts_diff_shows_changes(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        self._client(monkeypatch)
+        pf = tmp_path / "rule.json"
+        pf.write_text(_json.dumps({"id": "r1", "alert": "Renamed"}))
+        result = runner.invoke(cli, ["alerts", "diff", "r1", str(pf)])
+        assert result.exit_code == 0, result.output
+        assert "+  \"alert\": \"Renamed\"" in result.output
+
+
+class TestBundleHelpers:
+    def test_normalize_dashboard_fills_spec_defaults(self):
+        from signoz_cli.commands.bundle import _normalize_dashboard
+
+        doc = {"id": "d1", "name": "D", "spec": {"panels": {"a": 1}}}
+        out = _normalize_dashboard(doc)
+        assert out["spec"]["variables"] == []
+        assert out["spec"]["panels"] == {"a": 1}
+        # Input not mutated, volatile untouched here (strip is separate).
+        assert "variables" not in doc["spec"]
+
+    def test_normalize_dashboard_without_spec(self):
+        from signoz_cli.commands.bundle import _normalize_dashboard
+
+        assert _normalize_dashboard({"name": "D"}) == {"name": "D"}
+
+    def test_fetch_full_unwraps_envelope(self):
+        from signoz_cli.commands.bundle import _fetch_full
+
+        class Fake:
+            def get_dashboard_v2(self, dashboard_id):
+                return {"status": "success",
+                        "data": {"id": "d1", "name": "Dash"}}
+
+        assert _fetch_full(Fake(), "dashboards", {"id": "d1"}) == {
+            "id": "d1", "name": "Dash"}
+
+    def test_fetch_full_skips_on_error(self, capsys):
+        from signoz_cli.commands.bundle import _fetch_full
+
+        class Fake:
+            def get_alert(self, rule_id):
+                raise RuntimeError("gone")
+
+        assert _fetch_full(Fake(), "alerts", {"id": "r1", "alert": "R"}) is None
+        assert "skipping" in capsys.readouterr().err
+
+
+class TestBundleNormalize:
+    def test_normalize_drops_readonly_dashboard_fields(self):
+        from signoz_cli.commands.bundle import _normalize_dashboard
+
+        doc = {"id": "d1", "name": "D", "locked": True, "image": "x",
+               "source": "y", "spec": {}}
+        out = _normalize_dashboard(doc)
+        assert out == {"id": "d1", "name": "D",
+                       "spec": {"variables": [], "panels": {}}}
+
+    def test_normalize_keeps_rule_source(self):
+        # `source` is meaningful on rules; only dashboards drop it.
+        from signoz_cli.commands.bundle import _strip_volatile
+
+        doc = {"id": "r1", "alert": "R", "source": "logs",
+               "createdAt": "t"}
+        assert _strip_volatile(doc) == {"alert": "R", "source": "logs"}

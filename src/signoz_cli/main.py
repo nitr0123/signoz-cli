@@ -9,6 +9,7 @@ from signoz_cli.commands import (  # noqa: F401
     accounts,
     alerts,
     auth,
+    bundle,
     channels,
     dashboards,
     logs,

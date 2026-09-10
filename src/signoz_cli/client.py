@@ -139,6 +139,10 @@ class SigNozClient:
     def list_alerts(self) -> Any:
         return self._get("/api/v1/alerts")
 
+    def list_rules(self) -> Any:
+        """List all alert rule definitions (for export/migration)."""
+        return self._get("/api/v1/rules")
+
     def get_alert(self, rule_id: str) -> Any:
         return self._get(f"/api/v1/rules/{rule_id}")
 

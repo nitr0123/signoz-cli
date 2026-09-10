@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
     _MAX_PAGES,
@@ -330,3 +331,34 @@ def alerts_test(endpoint: str | None, token: str | None, fmt: str,
 # ===================================================================
 
 
+
+
+@alerts.command("diff")
+@_common_options
+@click.argument("rule_id")
+@click.argument("json_file", type=click.Path())
+def alerts_diff(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, rule_id: str, json_file: str
+) -> None:
+    """Show differences between the server rule and a local file.
+
+    Server-managed keys (id, timestamps, By-fields) are ignored. Prints
+    "(no changes)" when identical. Pair with `alerts update`.
+    """
+    try:
+        wanted = _read_json(json_file)
+        client = _get_client(endpoint, token, profile)
+        current = client.get_alert(rule_id)
+        if isinstance(current, dict):
+            current = current.get("data", current)
+        delta = _diff_objects(
+            current, wanted,
+            f"server:{rule_id}", f"file:{json_file}",
+        )
+        if delta:
+            click.echo(delta)
+        else:
+            click.echo("(no changes)")
+    except Exception as e:
+        _handle_error(e)
