@@ -6,6 +6,7 @@ from typing import Any
 
 import click
 
+from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _MAX_PAGES,
     _common_options,
@@ -202,3 +203,34 @@ def dashboards_delete(
         _handle_error(e)
 
 
+
+
+@dashboards.command("diff")
+@_common_options
+@click.argument("dashboard_id")
+@click.argument("json_file", type=click.Path())
+def dashboards_diff(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, dashboard_id: str, json_file: str
+) -> None:
+    """Show differences between the server dashboard and a local file.
+
+    Server-managed keys (id, timestamps, org) are ignored. Prints
+    "(no changes)" when identical. Pair with `dashboards update`.
+    """
+    try:
+        wanted = _read_json(json_file)
+        client = _get_client(endpoint, token, profile)
+        current = client.get_dashboard_v2(dashboard_id)
+        if isinstance(current, dict):
+            current = current.get("data", current)
+        delta = _diff_objects(
+            current, wanted,
+            f"server:{dashboard_id}", f"file:{json_file}",
+        )
+        if delta:
+            click.echo(delta)
+        else:
+            click.echo("(no changes)")
+    except Exception as e:
+        _handle_error(e)
