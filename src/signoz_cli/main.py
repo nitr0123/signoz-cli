@@ -18,6 +18,7 @@ from signoz_cli.commands import (  # noqa: F401
     raw,
     services,
     traces,
+    update,
     views,
 )
 from signoz_cli.commands.common import (

@@ -14,27 +14,55 @@ Built for the current SigNoz API surface:
 
 ## Installation
 
-### Pinned releases (recommended)
+Requires Python 3.10+ and SSH access to the Forgejo host.
 
-Install a specific immutable release tag (any machine with SSH access to the
-Forgejo host):
-
-```shell
-pip install git+ssh://forgejo/hamza/signoz-cli.git@v0.2.1
-```
-
-Or download the release wheel — note the instance sits behind an SSO wall, so
-downloads need a Forgejo API token:
+### One-liner (recommended)
 
 ```shell
-curl -sL -H "Authorization: token $FORGEJO_TOKEN" \
-  -o signoz_cli-0.2.1-py3-none-any.whl \
-  "http://localhost:3001/api/v1/repos/hamza/signoz-cli/releases"  # see releases page for asset URL
-pip install ./signoz_cli-0.2.1-py3-none-any.whl
+pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.8"
 ```
 
-Tags are immutable — `@v0.2.1` always gives you exactly the v0.2.1 build.
-See [releases](https://git.example.com/hamza/signoz-cli/releases) for available versions.
+Replace `v0.5.8` with the newest tag from the
+[releases](https://git.example.com/hamza/signoz-cli/releases) page, or
+resolve it without leaving the terminal:
+
+```shell
+TAG=$(git ls-remote --tags --sort=-v:refname ssh://forgejo/hamza/signoz-cli.git \
+  | grep -oE 'refs/tags/v[0-9][0-9A-Za-z.\-]*$' | head -n 1 | sed 's#refs/tags/##') \
+  pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@$TAG"
+```
+
+No pipx? Plain pip works too (inside a venv is best):
+
+```shell
+pip install "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.8"
+```
+
+### Helper script
+
+`install.sh` wraps the above: it resolves the newest tag, prefers pipx with
+a pip fallback, and verifies with `signoz --version`.
+
+```shell
+sh install.sh [version]   # defaults to newest release tag
+```
+
+Because this Forgejo instance sits behind SSO, downloading the script needs
+your API token (or just copy it out of a clone):
+
+```shell
+curl -fsSL -H "Authorization: token $FORGEJO_TOKEN" \
+  "http://localhost:3001/api/v1/repos/hamza/signoz-cli/contents/install.sh?ref=main" |
+  python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" | sh
+```
+
+### From a release wheel
+
+```shell
+curl -sL -H "Authorization: token $FORGEJO_TOKEN" -O \
+  "https://git.example.com/hamza/signoz-cli/releases/download/v0.5.8/signoz_cli-0.5.8-py3-none-any.whl"
+pip install ./signoz_cli-0.5.8-py3-none-any.whl
+```
 
 ### From source
 
@@ -45,6 +73,23 @@ pip install .
 # Editable with dev tools
 pip install -e '.[dev]'
 ```
+
+Tags are immutable — `@v0.5.8` always gives you exactly the v0.5.8 build.
+See [releases](https://git.example.com/hamza/signoz-cli/releases) for available versions.
+
+## Updating
+
+The CLI checks for newer releases at most once a day (cached in
+`~/.signoz/.update-check.json`, TTY sessions only) and prints a notice to
+stderr. Disable with `SIGNOZ_NO_UPDATE_CHECK=1`.
+
+```shell
+signoz update            # show installed vs latest + upgrade command
+signoz update --apply    # perform the upgrade for your install method
+```
+
+`--apply` supports pipx and pip-from-git installs out of the box; source
+checkouts get `git pull` instructions instead.
 
 ## Configuration
 

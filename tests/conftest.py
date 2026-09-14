@@ -1,5 +1,7 @@
 """Shared test fixtures and state reset."""
 
+import pytest
+
 import signoz_cli.commands.common as _common
 import signoz_cli.output as _out
 
@@ -19,6 +21,12 @@ def _reset_output_state() -> None:
     # Root -p profile: a test that sets this and fails mid-way must not
     # leak the profile into unrelated tests.
     _common._ROOT_PROFILE = None
+
+
+@pytest.fixture(autouse=True)
+def _no_update_check(monkeypatch):
+    """Unit tests must never spawn git/network update checks."""
+    monkeypatch.setenv("SIGNOZ_NO_UPDATE_CHECK", "1")
 
 
 def pytest_runtest_setup(item) -> None:  # noqa: ANN001

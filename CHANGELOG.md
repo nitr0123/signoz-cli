@@ -25,6 +25,24 @@
 
 ## Unreleased
 
+### Added
+
+- `signoz update` — check for newer releases and upgrade (`--apply`
+  supports pipx and pip-from-git installs; source checkouts get
+  `git pull` instructions). A daily cached check prints a stderr
+  notice in TTY sessions (opt out with `SIGNOZ_NO_UPDATE_CHECK=1`).
+- `install.sh` — one-step installer resolving the newest release tag
+  (pipx preferred, pip fallback, `signoz --version` verification).
+- `metrics top` — rank series by latest value (fixed sum/Cumulative
+  volume semantics).
+- `traces tail` / `alerts watch` — follow new spans and firing alerts
+  with dedupe caps, interval validation, and fatal-error fast exit.
+- `history` / `rerun` — local query history (`--token` invocations
+  are never recorded).
+- Bundle `export` / `import` with manifest, dry-run, and
+  skip/overwrite/fail conflict modes, plus `dashboards diff` and
+  `alerts diff` against the server version.
+
 ### Fixed
 
 - `auth verify` now honours the `--profile` flag (it was silently dropped, so

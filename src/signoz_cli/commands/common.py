@@ -567,6 +567,122 @@ def cli(ctx: click.Context, root_profile: str | None) -> None:
     # Full argv (not ctx.args, which drops already-parsed global flags
     # like -p that rerun needs to reproduce the invocation).
     _record_history(sys.argv[1:])
+    maybe_notify_update()
+
+
+UPDATE_REPO = "ssh://forgejo/hamza/signoz-cli.git"
+UPDATE_CHECK_INTERVAL_S = 24 * 3600
+
+
+def _update_cache_path():
+    """Location of the last update-check result (next to the config)."""
+    from pathlib import Path
+
+    return Path(CONFIG_DIR) / ".update-check.json"
+
+
+def _read_update_cache() -> dict[str, Any]:
+    """Read the cached update check; {} when missing or corrupt."""
+    try:
+        data = json.loads(_update_cache_path().read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _latest_remote_tag(repo: str) -> str | None:
+    """Newest vX.Y.Z tag via git ls-remote (SSH, no API token needed).
+
+    Returns None when git is missing, the host is unreachable, or no
+    version tags exist. Never raises.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", "--tags", repo],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    best: tuple[int, ...] = ()
+    best_tag: str | None = None
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
+            continue
+        ref = parts[1][len("refs/tags/"):]
+        if ref.endswith("^{}"):
+            continue
+        parsed = _parse_version(ref)
+        if parsed and parsed > best:
+            best, best_tag = parsed, ref
+    return best_tag
+
+
+def _update_available() -> str | None:
+    """Newest remote tag if newer than the installed version, else None.
+
+    Uses a 24h cache so normal invocations stay offline and fast.
+    """
+    if os.getenv("SIGNOZ_NO_UPDATE_CHECK"):
+        return None
+    repo = os.getenv("SIGNOZ_UPDATE_REPO", UPDATE_REPO)
+    try:
+        current = _parse_version(__version__)
+    except Exception:
+        return None
+    if not current:
+        return None
+    import time as _time
+
+    now = _time.time()
+    try:
+        cached = _read_update_cache()
+        checked_at = float(cached.get("checked_at", 0))
+        if now - checked_at < UPDATE_CHECK_INTERVAL_S:
+            latest = cached.get("latest")
+            if latest and _parse_version(latest) > current:
+                return latest
+            return None
+    except (TypeError, ValueError):
+        pass
+    latest = _latest_remote_tag(repo)
+    try:
+        path = _update_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"checked_at": now, "latest": latest}))
+    except OSError:
+        pass
+    if latest and _parse_version(latest) > current:
+        return latest
+    return None
+
+
+def maybe_notify_update() -> None:
+    """Warn on stderr when a newer release exists (best-effort).
+
+    Skipped for non-TTY stdout (scripts/pipes), when the check is
+    disabled, and never allowed to break or slow the invocation.
+    """
+    try:
+        if not sys.stdout.isatty():
+            return
+        # No point nagging inside the updater itself (position-independent
+        # check; a missed nag on exotic values is harmless).
+        if any(a in ("update", "completion") for a in sys.argv[1:]):
+            return
+        latest = _update_available()
+    except Exception:
+        return
+    if latest:
+        click.echo(
+            f"Update available: signoz-cli {latest} "
+            f"(installed: v{__version__}). Run 'signoz update' to upgrade.",
+            err=True,
+        )
 
 
 _QUERY_HISTORY_COMMANDS = {"logs", "traces", "metrics", "query", "promql", "sql"}
