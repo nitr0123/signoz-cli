@@ -274,3 +274,69 @@ class TestDetectInstallMethod:
         method, argv, _ = _up._detect_install_method()
         assert method == "unknown"
         assert argv is None
+
+
+class TestIndexInstallMethod:
+    def _no_direct_url(self, monkeypatch):
+        import importlib.metadata as _md
+
+        import signoz_cli.commands.update as _up
+
+        class Dist:
+            def read_text(self, name):
+                return None
+
+        monkeypatch.setattr(_md, "distribution", lambda name: Dist())
+        return _up
+
+    def test_index_without_env_gives_manual_instructions(
+            self, monkeypatch, tmp_path):
+        import signoz_cli.commands.update as _up
+
+        monkeypatch.delenv("SIGNOZ_PYPI_INDEX", raising=False)
+        monkeypatch.setattr(
+            _up.sys, "prefix", str(tmp_path))  # no pipx metadata
+        _up2 = self._no_direct_url(monkeypatch)
+        method, argv, instructions = _up2._detect_install_method()
+        assert method == "pip"
+        assert argv is None
+        assert "SIGNOZ_PYPI_INDEX" in instructions
+
+    def test_index_with_env_builds_upgrade_command(self, monkeypatch):
+
+        monkeypatch.setenv(
+            "SIGNOZ_PYPI_INDEX", "https://u:t@host/api/packages/hamza/pypi/simple")
+        _up2 = self._no_direct_url(monkeypatch)
+        method, argv, instructions = _up2._detect_install_method()
+        assert method == "pip"
+        assert argv is not None
+        assert argv[-1] == "signoz-cli=={tag}"
+        assert "--index-url" in argv
+        assert "<tag>" in instructions
+
+    def test_index_apply_runs_pip(self, runner, monkeypatch):
+        import subprocess as _sp
+
+        import signoz_cli.commands.update as _up
+
+        monkeypatch.setattr(_up, "_latest_remote_tag", lambda repo: "v0.6.0")
+        monkeypatch.setattr(_up, "__version__", "0.5.8")
+        monkeypatch.setenv(
+            "SIGNOZ_PYPI_INDEX", "https://u:t@host/api/packages/hamza/pypi/simple")
+        monkeypatch.setattr(
+            _up.sys, "prefix", "/nonexistent-prefix-for-test")
+        seen = {}
+
+        class Dist:
+            def read_text(self, name):
+                return None
+
+        import importlib.metadata as _md
+        monkeypatch.setattr(_md, "distribution", lambda name: Dist())
+        monkeypatch.setattr(
+            _sp, "run",
+            lambda cmd, **k: seen.update(cmd=cmd) or _Completed(0, ""))
+        result = runner.invoke(cli, ["update", "--apply"])
+        assert result.exit_code == 0, result.output
+        assert seen["cmd"][-1] == "signoz-cli==v0.6.0"
+        assert "Upgraded to v0.6.0" in result.output

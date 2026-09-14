@@ -27,6 +27,11 @@
 
 ### Added
 
+- PyPI registry publishing: every release now also lands in the
+  Forgejo package registry (`signoz update` detects index installs;
+  `pipx install signoz-cli==X` with `PIP_INDEX_URL` set).
+- `install.sh` installs from the package index when
+  `SIGNOZ_PYPI_INDEX` is set (no SSH needed), otherwise from git.
 - `signoz update` — check for newer releases and upgrade (`--apply`
   supports pipx and pip-from-git installs; source checkouts get
   `git pull` instructions). A daily cached check prints a stderr

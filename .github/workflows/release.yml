@@ -83,3 +83,15 @@ jobs:
           done
 
           echo "Release $TAG uploaded successfully."
+
+      - name: Publish to PyPI registry
+        env:
+          TWINE_PASSWORD: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          HOST="http://localhost:3001"
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          export TWINE_USERNAME="$OWNER"
+          # RELEASE_TOKEN needs read:package + write:package scopes.
+          python3 -m twine upload --non-interactive \
+            --repository-url "$HOST/api/packages/$OWNER/pypi" \
+            dist/*

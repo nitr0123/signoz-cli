@@ -16,12 +16,20 @@ from signoz_cli.commands.common import (
     cli,
 )
 
+DEFAULT_PYPI_INDEX = "https://git.example.com/api/packages/hamza/pypi/simple"
+
+
+def _pypi_index_url() -> str | None:
+    """Registry index URL, or None when the user hasn't configured one."""
+    return os.getenv("SIGNOZ_PYPI_INDEX") or None
+
 
 def _detect_install_method() -> tuple[str, list[str] | None, str]:
     """Detect how this copy was installed.
 
     Returns (method, upgrade_argv_or_None, instructions). ``upgrade_argv``
-    is None when upgrading must be done by hand (source checkouts).
+    is None when upgrading must be done by hand (source checkouts), or
+    when credentials are missing (index installs without SIGNOZ_PYPI_INDEX).
     """
     import importlib.metadata
     from pathlib import Path
@@ -34,8 +42,10 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
     try:
         dist = importlib.metadata.distribution("signoz-cli")
         direct_url = dist.read_text("direct_url.json")
+        have_dist = True
     except Exception:
         direct_url = None
+        have_dist = False
     if direct_url:
         import json as _json
 
@@ -59,6 +69,24 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
             return ("pip", cmd,
                     f"{sys.executable} -m pip install --upgrade "
                     f"--force-reinstall \"{base}@<tag>\"")
+    elif have_dist:
+        # Regular index install (no direct_url.json): upgrade from the
+        # registry. Credentials travel via SIGNOZ_PYPI_INDEX.
+        index = _pypi_index_url()
+        if index is None:
+            return (
+                "pip",
+                None,
+                "set SIGNOZ_PYPI_INDEX to your registry index URL "
+                f"(e.g. {DEFAULT_PYPI_INDEX} with credentials), then "
+                "re-run with --apply",
+            )
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
+               "--index-url", index,
+               "--extra-index-url", "https://pypi.org/simple",
+               "signoz-cli=={tag}"]
+        shown = " ".join(cmd).replace("{tag}", "<tag>")
+        return ("pip", cmd, shown)
     return (
         "unknown",
         None,
