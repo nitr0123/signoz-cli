@@ -14,28 +14,44 @@ Built for the current SigNoz API surface:
 
 ## Installation
 
-Requires Python 3.10+ and SSH access to the Forgejo host.
+Requires Python 3.10+.
 
-### One-liner (recommended)
+### Package registry (recommended)
+
+The releases publish to the built-in PyPI registry. One-time credential
+setup (personal access token with `read:package`):
 
 ```shell
-pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.8"
+export PIP_INDEX_URL="https://hamza:$FORGEJO_TOKEN@git.example.com/api/packages/hamza/pypi/simple"
+export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"
 ```
 
-Replace `v0.5.8` with the newest tag from the
-[releases](https://git.example.com/hamza/signoz-cli/releases) page, or
-resolve it without leaving the terminal:
+then install or upgrade a pinned release (pins protect against
+dependency-confusion lookalikes):
 
 ```shell
-TAG=$(git ls-remote --tags --sort=-v:refname ssh://forgejo/hamza/signoz-cli.git \
-  | grep -oE 'refs/tags/v[0-9][0-9A-Za-z.\-]*$' | head -n 1 | sed 's#refs/tags/##') \
-  pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@$TAG"
+pipx install "signoz-cli==0.5.14"
+# or plain pip:
+pip install "signoz-cli==0.5.14"
 ```
 
-No pipx? Plain pip works too (inside a venv is best):
+Without pipx, or for the newest tag without looking it up, `install.sh`
+does the same with a pip fallback:
 
 ```shell
-pip install "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.8"
+SIGNOZ_PYPI_INDEX="https://hamza:$FORGEJO_TOKEN@git.example.com/api/packages/hamza/pypi/simple" \
+  sh install.sh            # newest release
+SIGNOZ_PYPI_INDEX="..." sh install.sh 0.5.14   # pinned
+```
+
+### From git (no registry token needed)
+
+Needs SSH access to the Forgejo host instead:
+
+```shell
+pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.14"
+sh install.sh              # newest tag via git ls-remote
+sh install.sh v0.5.14      # pinned
 ```
 
 ### Helper script
