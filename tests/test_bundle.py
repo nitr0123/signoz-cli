@@ -513,3 +513,129 @@ class TestNewCommandErrors:
         result = runner.invoke(cli, [*argv, str(pf)])
         assert result.exit_code == 1
         assert "500" in result.output
+
+
+class TestDowntimeCommands:
+    def _fake(self, monkeypatch, calls):
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def list_downtime_schedules(self):
+                return {"status": "success", "data": [
+                    {"id": "m1", "name": "Maint"}]}
+
+            def get_downtime_schedule(self, schedule_id):
+                calls.append(("get", schedule_id))
+                return {"status": "success",
+                        "data": {"id": schedule_id, "name": "Maint"}}
+
+            def create_downtime_schedule(self, schedule):
+                calls.append(("create", schedule))
+                return {"status": "success", "data": {"id": "m9"}}
+
+            def update_downtime_schedule(self, schedule_id, schedule):
+                calls.append(("update", schedule_id, schedule))
+                return {"status": "ok"}
+
+            def delete_downtime_schedule(self, schedule_id):
+                calls.append(("delete", schedule_id))
+                return {"status": "ok"}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+
+    def test_list_body(self, runner, monkeypatch):
+        import json as _json
+
+        self._fake(monkeypatch, [])
+        result = runner.invoke(cli, ["alerts", "downtime", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        assert _json.loads(result.stdout) == {
+            "data": [{"id": "m1", "name": "Maint"}]}
+
+    def test_list_null_normalized(self, runner, monkeypatch):
+        import json as _json
+
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def list_downtime_schedules(self):
+                return {"status": "success", "data": None}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "downtime", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        assert _json.loads(result.stdout) == {"data": []}
+
+    def test_create_posts_payload(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = []
+        self._fake(monkeypatch, calls)
+        pf = tmp_path / "m.json"
+        pf.write_text(_json.dumps({"name": "M", "schedule": {}}))
+        result = runner.invoke(
+            cli, ["alerts", "downtime", "create", str(pf), "--json"])
+        assert result.exit_code == 0, result.output
+        assert calls == [("create", {"name": "M", "schedule": {}})]
+
+    def test_update_puts_payload(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        calls = []
+        self._fake(monkeypatch, calls)
+        pf = tmp_path / "m.json"
+        pf.write_text(_json.dumps({"name": "M2"}))
+        result = runner.invoke(
+            cli, ["alerts", "downtime", "update", "m1", str(pf), "--json"])
+        assert result.exit_code == 0, result.output
+        assert calls == [("update", "m1", {"name": "M2"})]
+
+    def test_delete_dry_run(self, runner, monkeypatch):
+        import json as _json
+
+        calls = []
+        self._fake(monkeypatch, calls)
+        result = runner.invoke(
+            cli, ["alerts", "downtime", "delete", "m1", "--dry-run", "--json"])
+        assert result.exit_code == 0, result.output
+        assert _json.loads(result.stdout)["action"] == "delete"
+        assert calls == []
+
+    def test_delete_yes(self, runner, monkeypatch):
+        calls = []
+        self._fake(monkeypatch, calls)
+        result = runner.invoke(
+            cli, ["alerts", "downtime", "delete", "m1", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert calls == [("delete", "m1")]
+
+    def test_get_error_propagates(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
+        from signoz_cli.client import SigNozApiError
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_downtime_schedule(self, schedule_id):
+                raise SigNozApiError(404, "not found")
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "downtime", "get", "nope"])
+        assert result.exit_code == 1
+        assert "404" in result.output

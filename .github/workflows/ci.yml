@@ -22,6 +22,8 @@ jobs:
         run: pip install -e '.[dev]' mypy
       - name: Ruff check
         run: ruff check .
+      - name: Shell syntax check
+        run: bash -n install.sh
       - name: Mypy
         run: mypy src/signoz_cli/
 

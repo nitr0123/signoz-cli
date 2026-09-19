@@ -50,9 +50,22 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(data: dict[str, Any]) -> None:
-    """Save config to ~/.signoz/config.json."""
+    """Save config to ~/.signoz/config.json (atomically, mode 0600).
+
+    Writes to a temp file in the same directory then renames, so a
+    crash mid-write can never leave a truncated config behind.
+    """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
+    tmp_path = CONFIG_DIR / f".config.json.{os.getpid()}.tmp"
+    try:
+        tmp_path.write_text(json.dumps(data, indent=2) + "\n")
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, CONFIG_FILE)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     CONFIG_FILE.chmod(0o600)
 
 

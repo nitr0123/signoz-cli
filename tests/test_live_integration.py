@@ -281,3 +281,54 @@ def test_v5_logs_query_shape(live_instance):
     results = resp["data"]["data"]["results"][0]
     # rows is None on some versions when there are no matches
     assert results.get("rows") is None or isinstance(results.get("rows"), list)
+
+
+def test_downtime_lifecycle(live_instance):
+    client = live_instance["client"]
+    body = {
+        "name": f"cli-e2e-{uuid.uuid4().hex[:8]}",
+        "description": "e2e",
+        "schedule": {
+            "timezone": "UTC",
+            "startTime": "2030-01-01T00:00:00Z",
+            "endTime": "2030-01-02T00:00:00Z",
+        },
+    }
+    created = client.create_downtime_schedule(body)
+    sched_id = created["data"]["id"]
+    try:
+        fetched = client.get_downtime_schedule(sched_id)
+        assert fetched["data"]["id"] == sched_id
+        listed = client.list_downtime_schedules()
+        data = listed.get("data") or []
+        assert any(s.get("id") == sched_id for s in data)
+    finally:
+        client.delete_downtime_schedule(sched_id)
+
+    remaining = client.list_downtime_schedules().get("data") or []
+    assert all(s.get("id") != sched_id for s in remaining)
+
+
+def test_export_import_dry_run_roundtrip(live_instance, tmp_path):
+    import json as _json
+
+    from click.testing import CliRunner
+
+    from signoz_cli.main import cli
+
+    target = tmp_path / "bundle"
+    result = CliRunner().invoke(cli, [
+        "export", str(target), "--yes",
+        "--endpoint", live_instance["url"],
+        "--token", live_instance["token"],
+    ])
+    assert result.exit_code == 0, result.output
+    manifest = _json.loads((target / "manifest.json").read_text())
+    assert set(manifest["counts"]) == {
+        "dashboards", "alerts", "channels", "views"}
+    result = CliRunner().invoke(cli, [
+        "import", str(target), "--dry-run",
+        "--endpoint", live_instance["url"],
+        "--token", live_instance["token"],
+    ])
+    assert result.exit_code == 0, result.output

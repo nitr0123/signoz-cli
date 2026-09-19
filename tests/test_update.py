@@ -340,3 +340,57 @@ class TestIndexInstallMethod:
         assert result.exit_code == 0, result.output
         assert seen["cmd"][-1] == "signoz-cli==v0.6.0"
         assert "Upgraded to v0.6.0" in result.output
+
+
+class TestPipxSourceFidelity:
+    def test_git_source_repinned(self, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "pipx_metadata.json").write_text(_json.dumps({
+            "main_package": {
+                "package_or_url": "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.1",
+                "pip_args": [],
+            }}))
+        cmd = _up._pipx_upgrade_command(
+            str(tmp_path / "pipx_metadata.json"), "ssh://x/y.git")
+        assert cmd == ["pipx", "install", "--force",
+                       "git+ssh://forgejo/hamza/signoz-cli.git@{tag}"]
+
+    def test_index_source_stays_on_index(self, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "pipx_metadata.json").write_text(_json.dumps({
+            "main_package": {"package_or_url": "signoz-cli",
+                             "pip_args": []}}))
+        cmd = _up._pipx_upgrade_command(
+            str(tmp_path / "pipx_metadata.json"), "ssh://x/y.git")
+        assert cmd == ["pipx", "install", "--force", "signoz-cli=={tag}"]
+        assert "git+" not in " ".join(cmd)
+
+    def test_unreadable_metadata_falls_back(self, tmp_path):
+        import signoz_cli.commands.update as _up
+
+        assert _up._pipx_upgrade_command(
+            str(tmp_path / "missing.json"), "ssh://x/y.git") is None
+        (tmp_path / "bad.json").write_text("not json{")
+        assert _up._pipx_upgrade_command(
+            str(tmp_path / "bad.json"), "ssh://x/y.git") is None
+        (tmp_path / "empty.json").write_text("{}")
+        assert _up._pipx_upgrade_command(
+            str(tmp_path / "empty.json"), "ssh://x/y.git") is None
+
+    def test_detect_uses_metadata_source(self, monkeypatch, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "pipx_metadata.json").write_text(_json.dumps({
+            "main_package": {"package_or_url": "signoz-cli"}}))
+        monkeypatch.setattr(_up.sys, "prefix", str(tmp_path))
+        method, argv, _ = _up._detect_install_method()
+        assert method == "pipx"
+        assert argv == ["pipx", "install", "--force", "signoz-cli=={tag}"]

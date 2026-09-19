@@ -68,7 +68,8 @@ def status_cmd(endpoint: str | None, token: str | None, fmt: str,
 def explain(topic: str) -> None:
     """Explain query syntax, filters, and available signals.
 
-    Topics: overview, filters, aggregations, metrics, logs, traces.
+    Topics: overview, filters, aggregations, metrics, logs, traces,
+    workflows.
 
     Examples:
 
@@ -264,6 +265,35 @@ Trace fields:
 
 Common fields:
   name, durationNano, hasError, traceID, spanID, service.name
+""",
+        "workflows": """WORKFLOWS (follow, rank, replay, migrate, maintain)
+====================================================
+
+Follow live telemetry (Ctrl-C stops; --interval sets poll seconds):
+  signoz logs tail --service api-server
+  signoz traces tail --service api-server
+  signoz alerts watch
+
+Rank and replay:
+  signoz metrics top http_server_duration --group-by service.name
+  signoz history                  # recent queries with indexes
+  signoz rerun 3                  # re-execute history entry 3
+
+Migrate between instances (profiles!):
+  signoz export ./backup -p prod
+  signoz import ./backup -p staging --dry-run
+  signoz import ./backup -p staging --on-conflict overwrite --yes
+  signoz dashboards diff <id> dashboard.json
+  signoz alerts diff <rule-id> rule.json
+
+Planned maintenance (mute alerts in a window):
+  signoz alerts downtime create window.json
+  signoz alerts downtime list
+  signoz alerts downtime delete <id> --yes
+
+Stay current:
+  signoz update                   # check installed vs latest release
+  signoz update --apply           # upgrade via your install method
 """,
     }
 
