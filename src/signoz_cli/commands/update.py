@@ -19,6 +19,29 @@ from signoz_cli.commands.common import (
 DEFAULT_PYPI_INDEX = "https://git.example.com/api/packages/hamza/pypi/simple"
 
 
+def _pipx_upgrade_command(meta_path: str, repo: str) -> list[str] | None:
+    """Build a source-faithful pipx reinstall command, or None to fall back.
+
+    Reads ``main_package.package_or_url`` from pipx metadata: git URLs are
+    re-pinned at the new tag, bare names become pinned index installs.
+    Anything unparseable returns None (caller falls back to git reinstall).
+    """
+    import json as _json
+
+    try:
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = _json.load(fh)
+        spec = meta.get("main_package", {}).get("package_or_url", "")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(spec, str) or not spec:
+        return None
+    if "://" in spec:
+        base = spec.split("@")[0]
+        return ["pipx", "install", "--force", f"{base}@{{tag}}"]
+    return ["pipx", "install", "--force", f"{spec}=={{tag}}"]
+
+
 def _pypi_index_url() -> str | None:
     """Registry index URL, or None when the user hasn't configured one."""
     return os.getenv("SIGNOZ_PYPI_INDEX") or None
@@ -35,8 +58,14 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
     from pathlib import Path
 
     repo = os.getenv("SIGNOZ_UPDATE_REPO", UPDATE_REPO)
-    # pipx venvs carry their metadata at the venv root.
-    if os.path.exists(os.path.join(sys.prefix, "pipx_metadata.json")):
+    # pipx venvs carry their metadata at the venv root, including the
+    # original install source: reinstall from the SAME source so an
+    # index install is never silently switched to git+SSH (or vice versa).
+    meta_path = os.path.join(sys.prefix, "pipx_metadata.json")
+    if os.path.exists(meta_path):
+        cmd = _pipx_upgrade_command(meta_path, repo)
+        if cmd is not None:
+            return ("pipx", cmd, " ".join(cmd).replace("{tag}", "<tag>"))
         cmd = ["pipx", "install", "--force", f"git+{repo}@{{tag}}"]
         return ("pipx", cmd, " ".join(cmd).replace("{tag}", "<tag>"))
     try:

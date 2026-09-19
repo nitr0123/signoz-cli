@@ -352,6 +352,32 @@ class SigNozClient:
         return self._post("/api/v2/rules/test", json_body=rule)
 
     # ------------------------------------------------------------------
+    # Planned maintenance (downtime schedules: mute alerts in a window)
+    # ------------------------------------------------------------------
+
+    def list_downtime_schedules(self) -> Any:
+        return self._get("/api/v1/downtime_schedules")
+
+    def get_downtime_schedule(self, schedule_id: str) -> Any:
+        return self._get(f"/api/v1/downtime_schedules/{schedule_id}")
+
+    def create_downtime_schedule(self, schedule: dict[str, Any]) -> Any:
+        return self._post("/api/v1/downtime_schedules", json_body=schedule,
+                          idempotent=False)
+
+    def update_downtime_schedule(
+        self, schedule_id: str, schedule: dict[str, Any]
+    ) -> Any:
+        resp = self._request(
+            "PUT", f"/api/v1/downtime_schedules/{schedule_id}", json_body=schedule
+        )
+        return self._parse(resp, allow_empty=True)
+
+    def delete_downtime_schedule(self, schedule_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v1/downtime_schedules/{schedule_id}")
+        return self._parse(resp, allow_empty=True)
+
+    # ------------------------------------------------------------------
     # Notification channels (admin)
     # ------------------------------------------------------------------
 

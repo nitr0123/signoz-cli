@@ -421,3 +421,94 @@ def alerts_watch(
             _time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("Stopped.", err=True)
+
+
+@alerts.group("downtime")
+def downtime() -> None:
+    """Manage planned-maintenance windows that mute alert notifications."""
+
+
+@downtime.command("list")
+@_common_options
+def downtime_list(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None) -> None:
+    """List planned-maintenance windows."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.list_downtime_schedules()
+        items = raw.get("data") if isinstance(raw, dict) else raw
+        emit({"data": items if isinstance(items, list) else []}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@downtime.command("get")
+@_common_options
+@click.argument("schedule_id")
+def downtime_get(endpoint: str | None, token: str | None, fmt: str,
+                 profile: str | None, schedule_id: str) -> None:
+    """Get a planned-maintenance window by id."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.get_downtime_schedule(schedule_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@downtime.command("create")
+@_common_options
+@click.argument("json_file", type=click.Path())
+def downtime_create(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, json_file: str) -> None:
+    """Create a planned-maintenance window from a JSON file.
+
+    Minimal example file:
+      {"name": "db migration", "description": "",
+       "schedule": {"timezone": "UTC",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "endTime": "2030-01-02T00:00:00Z"}}
+    """
+    try:
+        schedule = _read_json(json_file)
+        client = _get_client(endpoint, token, profile)
+        emit(client.create_downtime_schedule(schedule), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@downtime.command("update")
+@_common_options
+@click.argument("schedule_id")
+@click.argument("json_file", type=click.Path())
+def downtime_update(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, schedule_id: str, json_file: str) -> None:
+    """Replace a planned-maintenance window from a JSON file (full PUT)."""
+    try:
+        schedule = _read_json(json_file)
+        client = _get_client(endpoint, token, profile)
+        data = client.update_downtime_schedule(schedule_id, schedule)
+        emit(data or {"status": "updated"}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@downtime.command("delete")
+@_common_options
+@click.argument("schedule_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
+def downtime_delete(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, schedule_id: str,
+                    yes: bool, dry_run: bool) -> None:
+    """Delete a planned-maintenance window (alerts fire again)."""
+    try:
+        if dry_run:
+            emit({"action": "delete", "resource": "downtime schedule",
+                  "id": schedule_id}, fmt)
+            return
+        if not yes:
+            _confirm(f"Delete downtime schedule {schedule_id}?")
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_downtime_schedule(schedule_id), fmt)
+    except Exception as e:
+        _handle_error(e)
