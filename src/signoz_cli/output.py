@@ -397,6 +397,13 @@ _YAML_NUMERIC = re.compile(
     r"\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?|\.\d[\d_]*([eE][+-]?\d+)?"
     r"|\.(inf|Inf|INF)|\.(nan|NaN|NAN))$"
 )
+# PyYAML's implicit resolution is broader than _YAML_NUMERIC: trailing-dot
+# floats ('0.' -> 0.0), empty-fraction exponents ('0.e5'), and binary ints
+# ('0b101' -> 5) all resolve to non-strings. Any string matching these must
+# be quoted to survive a round trip as a string.
+_YAML_RESOLVES_NONSTRING = re.compile(
+    r"^[+-]?(\.\d+|\d+(\.\d*)?)([eE][+-]?\d+)?$|^[+-]?0[bB][01_]+$"
+)
 _YAML_WORDS = frozenset(
     "null Null NULL ~ true True TRUE false False FALSE "
     "yes Yes YES no No NO on On ON off Off OFF".split()
@@ -415,10 +422,18 @@ def _yaml_needs_quotes(s: str) -> bool:
         return True
     if _YAML_NUMERIC.match(s):
         return True
+    if _YAML_RESOLVES_NONSTRING.match(s):
+        return True
     if ": " in s or " #" in s:
         return True
-    # Legacy conservative set (colon, braces, etc. anywhere).
-    return any(c in s for c in ":#{}[]&*?|>!%@`")
+    # Whole-scalar document markers / merge keys: '...' ends the document
+    # and '<<' is the merge-key tag -- both fatal outside quotes.
+    if s in ("...", "<<"):
+        return True
+    # Legacy conservative set (colon, braces, etc. anywhere). Comma is
+    # included: nested containers render in flow style ([a,b]) where a
+    # bare comma splits items.
+    return any(c in s for c in ",:#{}[]&*?|>!%@`")
 
 
 def _yaml_key(k: Any) -> str:
@@ -459,7 +474,14 @@ def _yaml_number(v: int | float) -> str:
 
     if isinstance(v, float) and not math.isfinite(v):
         return ".nan" if math.isnan(v) else (".inf" if v > 0 else "-.inf")
-    return str(v)
+    s = str(v)
+    # YAML 1.1 (PyYAML) only parses exponential floats with a decimal
+    # point: str(1e-05) == '1e-05' loads back as a *string*. Insert the
+    # missing '.0' so numeric fidelity survives the round trip.
+    m = re.fullmatch(r"([-+]?\d+)([eE][-+]?\d+)", s)
+    if m:
+        return f"{m.group(1)}.0{m.group(2)}"
+    return s
 
 
 def _yaml_value(v: Any) -> str:
