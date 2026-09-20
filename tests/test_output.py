@@ -426,3 +426,63 @@ class TestEmptyContract:
 
         with _pytest.raises(_click.UsageError):
             emit([], "csv")
+
+
+class TestYamlRoundTrip:
+    def test_hostile_keys_and_values(self):
+        import yaml as _yaml
+
+        from signoz_cli.output import _to_yaml
+
+        data = {
+            "a:b": 1,
+            "c d": "x: y",
+            "e\nf": 1,
+            "num": "0123",
+            "ver": "1.0",
+            "bool-ish": "yes",
+            "quote": 'say "hi"\nbye',
+            "lead": "  padded  ",
+            "dash": "- item",
+            "nested": {"k": [1, "a:b", None, True]},
+        }
+        assert _yaml.safe_load(_to_yaml(data)) == data
+
+    @staticmethod
+    def _json_values():
+        from hypothesis import strategies as st
+
+        hostile = st.text(
+            alphabet=st.characters(
+                whitelist_categories=("L", "N", "P", "S", "Z"),
+                blacklist_characters="\x00",
+            ),
+            max_size=25,
+        )
+        scalar = st.one_of(
+            hostile, st.integers(), st.floats(allow_nan=False),
+            st.booleans(), st.none(),
+        )
+        return st.recursive(
+            scalar,
+            lambda children: st.one_of(
+                st.lists(children, max_size=4),
+                st.dictionaries(hostile, children, max_size=4),
+            ),
+            max_leaves=12,
+        )
+
+    def test_property_round_trip(self):
+        import yaml as _yaml
+        from hypothesis import given, settings
+
+        from signoz_cli.output import _to_yaml
+
+        @given(self._json_values())
+        @settings(max_examples=150, deadline=None)
+        def check(data):
+            # NaN never round-trips (excluded); infinities become strings
+            # only if the emitter misquotes -- assert exact equality.
+            assert _yaml.safe_load(_to_yaml(data)) == data
+
+        check()

@@ -1102,3 +1102,25 @@ class TestHistorySecrets:
         result = runner.invoke(cli, ["logs", "search", "--token", "x"])
         assert result.exit_code == 0, result.output
         assert not (tmp_path / "history.json").exists()
+
+
+class TestTailWindow:
+    @pytest.mark.parametrize("argv", [
+        ["logs", "tail", "--window", "bogus"],
+        ["traces", "tail", "--window", "1h30m"],
+    ])
+    def test_bad_window_fails_fast(self, runner, argv):
+        result = runner.invoke(cli, argv)
+        assert result.exit_code == 2, result.output
+        assert "Invalid time range" in result.output
+
+
+class TestTailWindowValidation:
+    @pytest.mark.parametrize("argv", [
+        ["logs", "tail", "--window", "bogus"],
+        ["traces", "tail", "--window", "1h30m"],
+    ])
+    def test_bad_window_fails_fast(self, runner, argv):
+        result = runner.invoke(cli, argv)
+        assert result.exit_code == 2, result.output
+        assert "Invalid time range" in result.output
