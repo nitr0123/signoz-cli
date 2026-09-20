@@ -22,7 +22,7 @@ from signoz_cli.commands.common import (
     _unwrap_history_timeline,
     cli,
 )
-from signoz_cli.output import emit
+from signoz_cli.output import _safe_text, emit
 from signoz_cli.timeutil import resolve_timestamps
 
 
@@ -410,12 +410,12 @@ def alerts_watch(
                     if key in seen:
                         continue
                     seen[key] = None
-                    click.echo(
+                    click.echo(_safe_text(
                         f"{alert.get('startsAt', '') or ''} "
                         f"{alert.get('severity', '') or ''} "
                         f"{alert.get('alertname', '') or ''} "
                         f"[{alert.get('state', '') or ''}]"
-                    )
+                    ))
             while len(seen) > 50000:
                 seen.popitem(last=False)
             _time.sleep(interval)

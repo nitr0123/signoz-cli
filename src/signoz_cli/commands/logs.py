@@ -24,7 +24,7 @@ from signoz_cli.commands.common import (
     _unwrap_v5,
     cli,
 )
-from signoz_cli.output import emit
+from signoz_cli.output import _safe_text, emit
 from signoz_cli.query import build_aggregate_query_payload, build_logs_query_payload
 from signoz_cli.timeutil import parse_time_range, resolve_timestamps
 
@@ -340,11 +340,11 @@ def logs_tail(
                     if key in seen:
                         continue
                     seen[key] = None
-                    click.echo(
+                    click.echo(_safe_text(
                         f"{row.get('timestamp', '')} "
                         f"{row.get('severity_text', '')!s:5s} "
                         f"{row.get('service.name', '')}: {row.get('body', '')}"
-                    )
+                    ))
             # bound memory: evict oldest keys first (insertion order preserved)
             while len(seen) > 50000:
                 seen.popitem(last=False)

@@ -682,7 +682,7 @@ def _print_table(
         table.add_column("Key")
         table.add_column("Value")
         for k, v in data.items():
-            table.add_row(str(k), _trunc(v, max_len=9999 if wide else 120))
+            table.add_row(_safe_text(k), _trunc(v, max_len=9999 if wide else 120))
         console.print(table)
     else:
         _write(f"{data}\n")
@@ -749,15 +749,34 @@ def _dict_list_table(
 
     table = Table(show_header=not _NO_HEADERS, header_style="bold")
     for k in keys:
-        table.add_column(k, no_wrap=wide)
+        table.add_column(_safe_text(k), no_wrap=wide)
     for row in rows:
         max_len = 9999 if wide else 120
         table.add_row(*(str(_trunc(row.get(k, ""), max_len=max_len)) for k in keys))
     console.print(table)
 
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _safe_text(v: Any) -> str:
+    """Neutralize terminal-injection payloads in human-readable output.
+
+    Telemetry values/keys are untrusted: strip C0 controls (kills every
+    ESC-based sequence: OSC title-set, OSC-8 hyperlinks, CSI) and escape
+    Rich markup brackets (kills ``[link=...]`` phishing via styling).
+    Display is preserved (``[prod]`` still shows as ``[prod]``).
+
+    Applies to TABLE rendering only -- JSON/YAML/CSV stay byte-faithful
+    for pipelines by design.
+    """
+    s = str(v).replace("\x1b", "").replace("\x07", "")
+    s = _CONTROL_CHARS_RE.sub("", s)
+    return s.replace("[", "\\[")
+
+
 def _trunc(v: Any, max_len: int = 120) -> str:
-    s = str(v)
+    s = _safe_text(v)
     if len(s) > max_len:
         return s[: max_len - 3] + "..."
     return s
