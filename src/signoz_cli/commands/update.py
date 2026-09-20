@@ -112,9 +112,10 @@ def _detect_install_method() -> tuple[str, Any, str]:
             base = url.rsplit("@", 1)[0]
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
                    "--force-reinstall", f"{base}@{{tag}}"]
-            return ("pip", cmd,
-                    f"{sys.executable} -m pip install --upgrade "
-                    f"--force-reinstall \"{base}@<tag>\"")
+            # base may embed registry credentials (git+https://user:pass@);
+            # the executed argv keeps them (pip needs them) but the
+            # terminal description must not echo them.
+            return ("pip", cmd, _describe_upgrade_argv(cmd).replace("{tag}", "<tag>"))
     elif have_dist:
         # Regular index install (no direct_url.json): upgrade from the
         # registry. Credentials travel via SIGNOZ_PYPI_INDEX.

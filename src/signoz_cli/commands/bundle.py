@@ -14,6 +14,7 @@ from signoz_cli import __version__
 from signoz_cli.commands.common import (
     _MAX_PAGES,
     _common_options,
+    _confirm,
     _get_client,
     _handle_error,
     cli,
@@ -158,9 +159,8 @@ def export_bundle(
         except Exception:
             server_version = ""
         if not yes:
-            click.confirm(
+            _confirm(
                 f"Export {', '.join(kinds)} from {client.endpoint} to {directory}?",
-                abort=True,
             )
         manifest: dict[str, Any] = {
             "tool": f"signoz-cli {__version__}",
@@ -245,10 +245,9 @@ def import_bundle(
                 "(expected subdirectories like dashboards/, alerts/)."
             )
         if not yes and not dry_run:
-            click.confirm(
+            _confirm(
                 f"Import {', '.join(kinds)} from {directory} "
                 f"to {client.endpoint} (on-conflict={on_conflict})?",
-                abort=True,
             )
         # Snapshot existing names once per kind for conflict handling.
         existing: dict[str, dict[str, dict[str, Any]]] = {}
@@ -355,8 +354,25 @@ def _overwrite(
         client.update_channel(clash.get("id", ""), body)
     elif kind == "views":
         clash_id = clash.get("id", "")
+        # No update API: delete + recreate. Recreate can fail after the
+        # delete has committed (transient 5xx), which would lose the view,
+        # so snapshot the old doc first and restore it on failure.
+        try:
+            old_full = client.get_saved_view(clash_id)
+            if isinstance(old_full, dict) and isinstance(old_full.get("data"), dict):
+                old_full = old_full["data"]
+        except Exception:
+            old_full = clash
         client.delete_saved_view(clash_id)
-        client.create_saved_view(body)
+        try:
+            client.create_saved_view(body)
+        except Exception:
+            try:
+                if isinstance(old_full, dict):
+                    client.create_saved_view(_strip_volatile(old_full))
+            except Exception:
+                pass
+            raise
     return "overwritten"
 
 

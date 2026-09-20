@@ -703,3 +703,82 @@ class TestHostileFiles:
         files = sorted((out / "dashboards").iterdir())
         assert len(files) == 2
         assert files[0].name != files[1].name
+class TestDestructiveSemantics:
+    def test_export_no_input_fails_fast(self, runner, fake, tmp_path):
+        result = runner.invoke(
+            cli, ["export", str(tmp_path / "o"), "--no-input"])
+        assert result.exit_code == 2
+        assert "--yes" in result.output
+
+    def test_import_no_input_fails_fast(self, runner, fake, tmp_path):
+        bundle = tmp_path / "b"
+        (bundle / "dashboards").mkdir(parents=True)
+        result = runner.invoke(
+            cli, ["import", str(bundle), "--no-input"])
+        assert result.exit_code == 2
+        assert "--yes" in result.output
+
+    def test_views_overwrite_restores_on_create_failure(
+            self, runner, monkeypatch, tmp_path):
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli as _cli
+
+        cfg = tmp_path / ".signoz"
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", cfg)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", cfg / "config.json")
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+
+        old_doc = {"id": "v1", "name": "V", "spec": {"a": 1}}
+        state = {"creates": [], "fail_new": True}
+
+        class ViewsFake:
+            endpoint = "http://sig.test:8080"
+
+            def close(self):
+                pass
+
+            def list_saved_views(self, source_page="logs"):
+                return {"status": "ok",
+                        "data": [{"id": "v1", "name": "V"}]}
+
+            def get_saved_view(self, view_id):
+                return {"status": "ok", "data": dict(old_doc)}
+
+            def delete_saved_view(self, view_id):
+                state["deleted"] = view_id
+                return {"status": "ok"}
+
+            def create_saved_view(self, doc):
+                state["creates"].append(doc)
+                if state["fail_new"] and doc.get("spec") != {"a": 1}:
+                    raise RuntimeError("transient 503")
+                return {"status": "ok", "data": {"id": "v2"}}
+
+            def list_dashboards_v2(self, **k):
+                return {"status": "ok", "data": {"dashboards": []}}
+
+            def list_rules(self):
+                return {"status": "ok", "data": {"rules": []}}
+
+            def list_channels(self):
+                return {"status": "ok", "data": []}
+
+            def get_server_version(self):
+                return {"version": "v0.138.0"}
+
+        monkeypatch.setattr(
+            cm, "SigNozClient", lambda *a, **k: ViewsFake())
+        bundle = tmp_path / "bundle"
+        (bundle / "views").mkdir(parents=True)
+        (bundle / "views" / "v.json").write_text(
+            _json.dumps({"name": "V", "spec": {"b": 2}}))
+        result = runner.invoke(
+            _cli, ["import", str(bundle), "--on-conflict", "overwrite",
+                   "--yes"])
+        assert result.exit_code == 1, result.output
+        assert state["deleted"] == "v1"
+        # The failed replacement was followed by a restore of the old doc.
+        assert state["creates"][-1].get("spec") == {"a": 1}

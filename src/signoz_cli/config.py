@@ -92,9 +92,17 @@ def save_config(data: dict[str, Any]) -> None:
 
 
 def get_profiles(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return the profiles mapping from a loaded config (possibly empty)."""
+    """Return the profiles mapping from a loaded config (possibly empty).
+
+    Entries that are not objects (hand-edited or corrupt configs, e.g.
+    ``"profiles": {"p": "oops"}``) are dropped: every consumer calls
+    ``.get`` on the values, so a stray string would otherwise surface as
+    an unhandled AttributeError traceback instead of a clean error.
+    """
     profiles = cfg.get("profiles")
-    return profiles if isinstance(profiles, dict) else {}
+    if not isinstance(profiles, dict):
+        return {}
+    return {k: v for k, v in profiles.items() if isinstance(v, dict)}
 
 
 def select_profile_name(

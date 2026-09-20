@@ -17,6 +17,7 @@ from signoz_cli import __version__
 from signoz_cli.client import SigNozApiError, SigNozClient
 from signoz_cli.config import (
     CONFIG_DIR,
+    CONFIG_FILE,
     get_profile_credentials,
     get_profile_option,
     get_profiles,
@@ -193,6 +194,12 @@ def _apply_json_patch(obj: Any, ops: list[dict[str, Any]]) -> Any:
 
 
 def _mask_token(token: str | None) -> str:
+    if token is None:
+        return "<not set>"
+    if not isinstance(token, str):
+        # Corrupt config (e.g. token: [1]): never traceback on display;
+        # connection setup rejects it cleanly (see _resolve_credentials).
+        return "<invalid>"
     if not token:
         return "<not set>"
     if len(token) > 12:
@@ -229,6 +236,9 @@ def _has_url_userinfo(text: str) -> bool:
 
 def _redact_userinfo(text: str) -> str:
     """Replace URL-embedded credentials with `<redacted>` for display."""
+    if not isinstance(text, str):
+        # Corrupt config values must not traceback display paths.
+        return str(text)
     if "@" not in text:
         return text
     try:
@@ -283,6 +293,13 @@ def _resolve_credentials(
     """
     cfg = load_config()
     requested = profile_name or _ROOT_PROFILE or os.getenv("SIGNOZ_PROFILE")
+    if requested is not None and not isinstance(requested, str):
+        # Corrupt config (e.g. `"default": ["x"]`): unhashable for the
+        # profiles lookup below, so fail closed with guidance.
+        raise click.UsageError(
+            f"Invalid profile selection {requested!r} in config "
+            f"{CONFIG_FILE}: must be a profile name string."
+        )
     if requested and requested not in get_profiles(cfg):
         available = ", ".join(sorted(get_profiles(cfg))) or "<none configured>"
         raise click.UsageError(
@@ -290,10 +307,26 @@ def _resolve_credentials(
             "See 'signoz profile list'."
         )
     selected = _selected_profile_name(profile_name)
+    if selected is not None and not isinstance(selected, str):
+        raise click.UsageError(
+            f"Invalid default profile {selected!r} in config "
+            f"{CONFIG_FILE}: must be a profile name string."
+        )
     prof_endpoint, prof_token = get_profile_credentials(cfg, selected)
 
     resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
     resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
+    if resolved_endpoint is not None and not isinstance(resolved_endpoint, str):
+        raise click.UsageError(
+            f"Invalid endpoint {resolved_endpoint!r} "
+            f"(profile '{selected}'): must be a URL string. "
+            "Fix with 'signoz configure'."
+        )
+    if resolved_token is not None and not isinstance(resolved_token, str):
+        raise click.UsageError(
+            f"Invalid token for profile '{selected}': must be a string. "
+            "Fix with 'signoz configure'."
+        )
     _reject_endpoint_userinfo(resolved_endpoint, source="URL")
     if resolved_endpoint and "://" not in resolved_endpoint:
         # Bare "host:port" is the natural way to write a local endpoint.
@@ -311,6 +344,13 @@ def _profile_time_range(profile_name: str | None) -> str | None:
     cfg = load_config()
     selected = _selected_profile_name(profile_name)
     val: str | None = get_profile_option(cfg, selected, "default_time_range")
+    if val is not None and not isinstance(val, str):
+        raise click.UsageError(
+            f"Invalid default_time_range {val!r} on profile "
+            f"'{selected}'. Fix with: signoz configure -p {selected} "
+            "--endpoint <url> --token <key> --default-time-range <range> "
+            "(e.g. 24h)."
+        )
     if val:
         try:
             parse_time_range(val)
@@ -511,6 +551,22 @@ def _time_options(default_range: str = "6h"):
     return decorate
 
 
+def _is_truthy(value: Any) -> bool:
+    """Strict truthiness for security-sensitive flags (profile/env).
+
+    A hand-edited config may hold ``insecure: "false"`` (a non-empty
+    string): Python truthiness would treat that as *true* and silently
+    disable TLS verification. Only explicit true-values count.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
 def _get_client(
     endpoint: str | None, token: str | None, profile: str | None = None
 ) -> SigNozClient:
@@ -560,7 +616,7 @@ def _get_client(
         parsed = _parse_timeout(prof["timeout"], f"profile '{selected}'")
         if parsed is not None:
             timeout = parsed
-    if prof.get("insecure"):
+    if _is_truthy(prof.get("insecure")):
         insecure = True
 
     client = SigNozClient(
