@@ -185,6 +185,11 @@ def _jsonpath_extract(data: Any, path: str) -> Any:
       $[*].field              — map field over array
       $.items[*].field        — map field over nested array
       $.items[0].field        — index into nested array, then field
+
+    NOTE (roadmap): this intentionally covers only the subset above. If
+    full JSONPath is ever needed (filters like ``[?(@.x > 1)]``,
+    recursive descent ``..``), replace this with the ``jsonpath-ng``
+    dependency instead of extending the hand-rolled grammar.
     """
     if not path.startswith("$"):
         raise click.UsageError(f"JSONPath must start with $: {path!r}")
@@ -337,171 +342,42 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# YAML output
+# YAML output (PyYAML)
 # ---------------------------------------------------------------------------
 
-def _to_yaml(data: Any, indent: int = 0) -> str:
-    """Best-effort YAML output (no pyyaml dependency)."""
-    prefix = "  " * indent
-    lines: list[str] = []
+def _yaml_sanitize(data: Any) -> Any:
+    """Reduce *data* to PyYAML-representable scalars/containers.
 
+    API payloads are JSON-native, but defensive stringification of exotic
+    values (datetimes, sets, custom objects) keeps emission total instead
+    of raising ``RepresenterError`` on surprising server responses.
+    Mapping keys outside the scalar set are stringified; everything else
+    passes through untouched so types round-trip exactly.
+    """
+    if data is None or isinstance(data, (bool, int, float, str)):
+        return data
     if isinstance(data, dict):
-        if not data:
-            lines.append(f"{prefix}{{}}")
-        for k, v in data.items():
-            if isinstance(v, dict) and v:
-                lines.append(f"{prefix}{_yaml_key(k)}:")
-                lines.append(_to_yaml(v, indent + 1))
-            elif isinstance(v, list) and v:
-                lines.append(f"{prefix}{_yaml_key(k)}:")
-                for item in v:
-                    if isinstance(item, dict):
-                        first = True
-                        for ik, iv in item.items():
-                            if first:
-                                lines.append(f"{prefix}  - {_yaml_key(ik)}: {_yaml_value(iv)}")
-                                first = False
-                            else:
-                                lines.append(f"{prefix}    {_yaml_key(ik)}: {_yaml_value(iv)}")
-                        if first:
-                            lines.append(f"{prefix}  - {{}}")
-                    else:
-                        lines.append(f"{prefix}  - {_yaml_value(item)}")
-            else:
-                lines.append(f"{prefix}{_yaml_key(k)}: {_yaml_value(v)}")
-    elif isinstance(data, list):
-        if not data:
-            lines.append(f"{prefix}[]")
-        for item in data:
-            if isinstance(item, dict):
-                first = True
-                for k, v in item.items():
-                    if first:
-                        lines.append(f"{prefix}- {_yaml_key(k)}: {_yaml_value(v)}")
-                        first = False
-                    else:
-                        lines.append(f"  {_yaml_key(k)}: {_yaml_value(v)}")
-                if first:
-                    lines.append(f"{prefix}- {{}}")
-            else:
-                lines.append(f"{prefix}- {_yaml_value(item)}")
-    else:
-        lines.append(f"{prefix}{_yaml_value(data)}")
-
-    return "\n".join(lines) + "\n"
+        return {
+            k if k is None or isinstance(k, (bool, int, float, str)) else str(k):
+            _yaml_sanitize(v)
+            for k, v in data.items()
+        }
+    if isinstance(data, (list, tuple)):
+        return [_yaml_sanitize(v) for v in data]
+    return str(data)
 
 
-_YAML_NUMERIC = re.compile(
-    r"^[+-]?("
-    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|"
-    r"\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?|\.\d[\d_]*([eE][+-]?\d+)?"
-    r"|\.(inf|Inf|INF)|\.(nan|NaN|NAN))$"
-)
-# PyYAML's implicit resolution is broader than _YAML_NUMERIC: trailing-dot
-# floats ('0.' -> 0.0), empty-fraction exponents ('0.e5'), and binary ints
-# ('0b101' -> 5) all resolve to non-strings. Any string matching these must
-# be quoted to survive a round trip as a string.
-_YAML_RESOLVES_NONSTRING = re.compile(
-    r"^[+-]?(\.\d+|\d+(\.\d*)?)([eE][+-]?\d+)?$|^[+-]?0[bB][01_]+$"
-)
-_YAML_WORDS = frozenset(
-    "null Null NULL ~ true True TRUE false False FALSE "
-    "yes Yes YES no No NO on On ON off Off OFF".split()
-)
+def _to_yaml(data: Any) -> str:
+    """Render *data* as block-style YAML via PyYAML (insertion order kept)."""
+    import yaml
 
-
-def _yaml_needs_quotes(s: str) -> bool:
-    """Whether a string scalar must be quoted to survive a YAML round trip."""
-    if s == "" or s != s.strip():
-        return True
-    if "\n" in s or "\r" in s or "\t" in s:
-        return True
-    if s[0] in "-?:,[]{}#&*!|>'\"%@`":
-        return True
-    if s in _YAML_WORDS:
-        return True
-    if _YAML_NUMERIC.match(s):
-        return True
-    if _YAML_RESOLVES_NONSTRING.match(s):
-        return True
-    if ": " in s or " #" in s:
-        return True
-    # Whole-scalar document markers / merge keys: '...' ends the document
-    # and '<<' is the merge-key tag -- both fatal outside quotes.
-    if s in ("...", "<<"):
-        return True
-    # Legacy conservative set (colon, braces, etc. anywhere). Comma is
-    # included: nested containers render in flow style ([a,b]) where a
-    # bare comma splits items.
-    return any(c in s for c in ",:#{}[]&*?|>!%@`")
-
-
-def _yaml_key(k: Any) -> str:
-    """Format a mapping key (quoted when needed for round-trip safety)."""
-    if isinstance(k, bool):
-        return "true" if k else "false"
-    if isinstance(k, (int, float)):
-        return str(k)
-    s = str(k)
-    if _yaml_needs_quotes(s):
-        return json.dumps(s, ensure_ascii=False)
-    return s
-
-
-def _yaml_flow(v: Any) -> str:
-    """Single-line flow-style YAML for arbitrarily nested values."""
-    if v is None:
-        return "null"
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return _yaml_number(v)
-    if isinstance(v, str):
-        return json.dumps(v, ensure_ascii=False) if _yaml_needs_quotes(v) else v
-    if isinstance(v, list):
-        return "[" + ", ".join(_yaml_flow(x) for x in v) + "]"
-    if isinstance(v, dict):
-        return "{" + ", ".join(
-            f"{_yaml_key(k)}: {_yaml_flow(x)}" for k, x in v.items()
-        ) + "}"
-    s = str(v)
-    return json.dumps(s, ensure_ascii=False) if _yaml_needs_quotes(s) else s
-
-
-def _yaml_number(v: int | float) -> str:
-    """Format a number so it round-trips (non-finite floats need literals)."""
-    import math
-
-    if isinstance(v, float) and not math.isfinite(v):
-        return ".nan" if math.isnan(v) else (".inf" if v > 0 else "-.inf")
-    s = str(v)
-    # YAML 1.1 (PyYAML) only parses exponential floats with a decimal
-    # point: str(1e-05) == '1e-05' loads back as a *string*. Insert the
-    # missing '.0' so numeric fidelity survives the round trip.
-    m = re.fullmatch(r"([-+]?\d+)([eE][-+]?\d+)", s)
-    if m:
-        return f"{m.group(1)}.0{m.group(2)}"
-    return s
-
-
-def _yaml_value(v: Any) -> str:
-    """Format a value for YAML output (containers use flow style)."""
-    if v is None:
-        return "null"
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return _yaml_number(v)
-    if isinstance(v, (dict, list)):
-        # Nested containers render in flow style (block layout here would
-        # need indent tracking; flow is always valid YAML).
-        return _yaml_flow(v)
-    s = str(v)
-    if _yaml_needs_quotes(s):
-        # json.dumps quoting handles embedded quotes/newlines correctly
-        # (plain f'"{s}"' would emit invalid YAML for those).
-        return json.dumps(s, ensure_ascii=False)
-    return s
+    return yaml.safe_dump(
+        _yaml_sanitize(data),
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=4096,
+    )
 
 
 # ---------------------------------------------------------------------------
