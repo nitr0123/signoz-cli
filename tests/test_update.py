@@ -394,3 +394,35 @@ class TestPipxSourceFidelity:
         method, argv, _ = _up._detect_install_method()
         assert method == "pipx"
         assert argv == ["pipx", "install", "--force", "signoz-cli=={tag}"]
+
+
+class TestPipxMetadataRobustness:
+    def test_credentials_url_preserved(self, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "pipx_metadata.json").write_text(_json.dumps({
+            "main_package": {"package_or_url":
+                             "git+https://user:s3cret@host/x/y.git@v0.5.1"}}))
+        cmd = _up._pipx_upgrade_command(
+            str(tmp_path / "pipx_metadata.json"), "ssh://x/y.git")
+        assert cmd == ["pipx", "install", "--force",
+                       "git+https://user:s3cret@host/x/y.git@{tag}"]
+
+    def test_non_dict_main_package_falls_back(self, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "meta.json").write_text(_json.dumps(
+            {"main_package": ["not", "a", "dict"]}))
+        assert _up._pipx_upgrade_command(
+            str(tmp_path / "meta.json"), "ssh://x/y.git") is None
+
+    def test_non_dict_top_level_falls_back(self, tmp_path):
+        import signoz_cli.commands.update as _up
+
+        (tmp_path / "meta.json").write_text("[1, 2]")
+        assert _up._pipx_upgrade_command(
+            str(tmp_path / "meta.json"), "ssh://x/y.git") is None

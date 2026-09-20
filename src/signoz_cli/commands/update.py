@@ -31,13 +31,15 @@ def _pipx_upgrade_command(meta_path: str, repo: str) -> list[str] | None:
     try:
         with open(meta_path, encoding="utf-8") as fh:
             meta = _json.load(fh)
-        spec = meta.get("main_package", {}).get("package_or_url", "")
-    except (OSError, ValueError):
+        main = meta.get("main_package", {})
+        spec = main.get("package_or_url", "") if isinstance(main, dict) else ""
+    except (OSError, ValueError, AttributeError):
         return None
     if not isinstance(spec, str) or not spec:
         return None
     if "://" in spec:
-        base = spec.split("@")[0]
+        # rsplit: credentials (user:pass@) may themselves contain "@".
+        base = spec.rsplit("@", 1)[0]
         return ["pipx", "install", "--force", f"{base}@{{tag}}"]
     return ["pipx", "install", "--force", f"{spec}=={{tag}}"]
 
@@ -92,7 +94,7 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
                 )
         url = info.get("url", "") if isinstance(info, dict) else ""
         if url.startswith("git+"):
-            base = url.split("@")[0]
+            base = url.rsplit("@", 1)[0]
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
                    "--force-reinstall", f"{base}@{{tag}}"]
             return ("pip", cmd,
@@ -119,17 +121,14 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
     return (
         "unknown",
         None,
-        f"curl -fsSL {repo}/install.sh ... "
-        "(see README Installation; manual upgrade required)",
+        "manual upgrade required (see README Installation)",
     )
 
 
 @cli.command("update")
 @click.option("--apply", is_flag=True,
               help="Actually perform the upgrade (otherwise just report).")
-@click.option("--check", "check_only", is_flag=True,
-              help="Only check; same as the default report without hints.")
-def update_cmd(apply: bool, check_only: bool) -> None:
+def update_cmd(apply: bool) -> None:
     """Check for a newer release and show (or apply) the upgrade.
 
     \b
