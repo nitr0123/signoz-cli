@@ -49,17 +49,49 @@ esac
 if [ -n "${SIGNOZ_PYPI_INDEX:-}" ]; then
     if [ "$WANT" = "latest" ]; then
         # Resolve the newest version from the simple index (no git/SSH).
+        # NOTE: credentials stay out of the request URL (stdlib urllib
+        # misparses userinfo as host:port); they go in a Basic header.
         WANT=$(SIGNOZ_PYPI_INDEX="$SIGNOZ_PYPI_INDEX" python3 - <<'EOF'
-import os, re, urllib.request
-base = os.environ["SIGNOZ_PYPI_INDEX"].rstrip("/")
-url = base + "/signoz-cli/"
+import base64
+import os
+import re
+import urllib.parse
+import urllib.request
+raw = os.environ["SIGNOZ_PYPI_INDEX"].rstrip("/")
+parts = urllib.parse.urlsplit(raw)
+userinfo, _, host = parts.netloc.rpartition("@")
+clean = urllib.parse.urlunsplit(
+    (parts.scheme, host, parts.path, parts.query, ""))
+req = urllib.request.Request(clean + "/signoz-cli/")
+if userinfo:
+    req.add_header("Authorization", "Basic " + base64.b64encode(
+        userinfo.encode()).decode())
 try:
-    html = urllib.request.urlopen(url, timeout=20).read().decode()
+    html = urllib.request.urlopen(req, timeout=20).read().decode()
 except Exception as ex:
-    raise SystemExit(f"install.sh: cannot read index {url}: {ex}")
+    raise SystemExit(f"install.sh: cannot read index {clean}: {ex}")
+# Filenames look like signoz_cli-0.5.18-py3-none-any.whl or
+# signoz_cli-0.5.18.tar.gz (plus a #sha256 fragment): the version is
+# the first dash-separated component starting with a digit.
 versions = set()
-for m in re.finditer(r"signoz-cli-([0-9][^-\"']*?)(?:\.tar\.gz|\.whl|-[^-\"']*\.whl)", html):
-    versions.add(m.group(1))
+for m in re.finditer(r'href="([^"]+)"', html):
+    fn = os.path.basename(m.group(1)).split("#")[0]
+    for prefix in ("signoz_cli-", "signoz-cli-"):
+        if fn.startswith(prefix):
+            rest = fn[len(prefix):]
+            break
+    else:
+        continue
+    if rest.endswith(".tar.gz"):
+        rest = rest[:-len(".tar.gz")]
+    elif rest.endswith(".whl"):
+        rest = rest[:-len(".whl")]
+    else:
+        continue
+    for part in rest.split("-"):
+        if part[:1].isdigit():
+            versions.add(part)
+            break
 if not versions:
     raise SystemExit("install.sh: no signoz-cli releases found in the index")
 def key(v):

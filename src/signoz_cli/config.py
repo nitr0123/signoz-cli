@@ -49,6 +49,27 @@ def load_config() -> dict[str, Any]:
         return {}
 
 
+def _sweep_stale_tmps(max_age_s: float = 3600.0) -> None:
+    """Remove abandoned save temp files from crashed runs.
+
+    Only files matching our pid-suffixed pattern and older than
+    ``max_age_s`` are touched, so a concurrently-writing process
+    (whose file is seconds old) is never disturbed. Best-effort.
+    """
+    import time as _time
+
+    try:
+        now = _time.time()
+        for path in CONFIG_DIR.glob(".config.json.*.tmp"):
+            try:
+                if now - path.stat().st_mtime > max_age_s:
+                    path.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def save_config(data: dict[str, Any]) -> None:
     """Save config to ~/.signoz/config.json (atomically, mode 0600).
 
@@ -56,6 +77,7 @@ def save_config(data: dict[str, Any]) -> None:
     crash mid-write can never leave a truncated config behind.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _sweep_stale_tmps()
     tmp_path = CONFIG_DIR / f".config.json.{os.getpid()}.tmp"
     try:
         tmp_path.write_text(json.dumps(data, indent=2) + "\n")
