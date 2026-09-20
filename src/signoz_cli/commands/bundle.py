@@ -173,12 +173,22 @@ def export_bundle(
             kind_dir = os.path.join(directory, kind)
             os.makedirs(kind_dir, exist_ok=True)
             saved = 0
+            seen_names: set[str] = set()
             for item in items:
                 full = _fetch_full(client, kind, item)
                 if full is None:
                     continue
                 item_id = str(full.get("id", item.get("id", "noid")))
                 fname = f"{_safe_name(_item_name(kind, full))}.{item_id[:8]}.json"
+                # Two items can sanitize to the same filename (same name
+                # + same id prefix): suffix instead of silently dropping
+                # the first export.
+                base, n = fname, 1
+                while fname in seen_names:
+                    n += 1
+                    stem = base[: -len(".json")]
+                    fname = f"{stem}.{n}.json"
+                seen_names.add(fname)
                 with open(os.path.join(kind_dir, fname), "w", encoding="utf-8") as fh:
                     json.dump(full, fh, indent=2, default=str)
                     fh.write("\n")
@@ -248,10 +258,23 @@ def import_bundle(
         report = []
         for kind in kinds:
             kind_dir = os.path.join(directory, kind)
+            kind_real = os.path.realpath(kind_dir)
             for fname in sorted(os.listdir(kind_dir)):
                 if not fname.endswith(".json"):
                     continue
-                with open(os.path.join(kind_dir, fname), encoding="utf-8") as fh:
+                fpath = os.path.realpath(os.path.join(kind_dir, fname))
+                # A hostile (or sloppy) bundle may contain symlinks or
+                # hardlinked names escaping the bundle directory: reading
+                # them would POST outside files to the target instance.
+                if (os.path.dirname(fpath) != kind_real
+                        or not os.path.isfile(fpath)):
+                    click.echo(
+                        f"Warning: skipping {kind}/{fname}: not a regular "
+                        "file inside the bundle directory.",
+                        err=True,
+                    )
+                    continue
+                with open(fpath, encoding="utf-8") as fh:
                     doc = json.load(fh)
                 name = _item_name(kind, doc) if isinstance(doc, dict) else fname
                 clash = existing[kind].get(name)

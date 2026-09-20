@@ -113,9 +113,28 @@ def _read_json(path: str) -> Any:
     """Read a JSON payload from a file, or from stdin when path is '-'.
 
     clig.dev: support '-' for stdin where a file argument is expected.
+
+    Intake is capped at ``_MAX_JSON_BYTES``: payload files are KBs in
+    practice, so a multi-MB blob is a mistake (or a hostile file) rather
+    than a dashboard. Failing fast bounds memory instead of OOMing.
     """
     if path == "-":
-        return json.load(sys.stdin)
+        raw = sys.stdin.read(_MAX_JSON_BYTES + 1)
+        if len(raw) > _MAX_JSON_BYTES:
+            raise click.UsageError(
+                f"Refusing to read more than {_MAX_JSON_BYTES // (1024 * 1024)}MiB "
+                "of JSON from stdin."
+            )
+        return json.loads(raw)
+    try:
+        size = os.path.getsize(path)
+    except OSError as ex:
+        raise click.UsageError(f"Cannot read {path}: {ex}") from None
+    if size > _MAX_JSON_BYTES:
+        raise click.UsageError(
+            f"Refusing to read {path} ({size} bytes > "
+            f"{_MAX_JSON_BYTES // (1024 * 1024)}MiB cap)."
+        )
     with open(path) as fh:
         return json.load(fh)
 
@@ -687,6 +706,11 @@ def maybe_notify_update() -> None:
 
 _QUERY_HISTORY_COMMANDS = {"logs", "traces", "metrics", "query", "promql", "sql"}
 _QUERY_HISTORY_LIMIT = 100
+
+# Upper bound for any JSON file/stdin intake (query payloads, rule and
+# dashboard definitions, bundle items). Real payloads are KBs; anything
+# near this is a mistake or a hostile file.
+_MAX_JSON_BYTES = 32 * 1024 * 1024
 
 
 def _history_path():
