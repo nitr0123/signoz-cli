@@ -639,3 +639,67 @@ class TestDowntimeCommands:
         result = runner.invoke(cli, ["alerts", "downtime", "get", "nope"])
         assert result.exit_code == 1
         assert "404" in result.output
+
+
+class TestHostileFiles:
+    def test_read_json_size_cap(self, tmp_path, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(cm, "_MAX_JSON_BYTES", 64)
+        big = tmp_path / "big.json"
+        big.write_text('{"pad": "' + "x" * 100 + '"}')
+        import click
+        import pytest
+
+        with pytest.raises(click.UsageError, match="cap"):
+            cm._read_json(str(big))
+        small = tmp_path / "small.json"
+        small.write_text('{"a": 1}')
+        assert cm._read_json(str(small)) == {"a": 1}
+
+    def test_read_stdin_size_cap(self, monkeypatch):
+        import io as _io
+        import sys as _sys
+
+        import click
+        import pytest
+
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(cm, "_MAX_JSON_BYTES", 16)
+        monkeypatch.setattr(_sys, "stdin", _io.StringIO("x" * 100))
+        with pytest.raises(click.UsageError, match="[Ss]tdin"):
+            cm._read_json("-")
+
+    def test_import_skips_escaping_symlink(self, runner, fake, tmp_path):
+        import json as _json
+        import os as _os
+
+        bundle = tmp_path / "bundle"
+        kind_dir = bundle / "dashboards"
+        kind_dir.mkdir(parents=True)
+        (kind_dir / "good.json").write_text(_json.dumps(
+            {"name": "Good", "spec": {}}))
+        outside = tmp_path / "outside.json"
+        outside.write_text(_json.dumps({"name": "EXFIL", "spec": {}}))
+        _os.symlink(outside, kind_dir / "evil.json")
+        result = runner.invoke(
+            cli, ["import", str(bundle), "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "not a regular file" in result.output
+        created = [c for c in fake.calls["create"] if c[0] == "dashboards"]
+        assert len(created) == 1
+        assert created[0][1].get("name") == "Good"
+
+    def test_export_dedups_colliding_names(self, runner, fake, tmp_path):
+        fake.dashboards = [
+            {"id": "abcdef01", "name": "Same"},
+            {"id": "abcdef02", "name": "Same"},
+        ]
+        out = tmp_path / "out"
+        result = runner.invoke(
+            cli, ["export", str(out), "--include", "dashboards", "--yes"])
+        assert result.exit_code == 0, result.output
+        files = sorted((out / "dashboards").iterdir())
+        assert len(files) == 2
+        assert files[0].name != files[1].name
