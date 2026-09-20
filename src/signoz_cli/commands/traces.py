@@ -394,6 +394,10 @@ def traces_tail(
     if interval <= 0:
         raise click.UsageError("--interval must be positive (seconds between polls).")
     try:
+        win_ms = parse_time_range(window)
+    except ValueError as ex:
+        raise click.UsageError(str(ex)) from None
+    try:
         client = _get_client(endpoint, token, profile)
     except Exception as ex:
         _handle_error(ex)
@@ -405,7 +409,6 @@ def traces_tail(
     try:
         while True:
             now_ms = int(_time.time() * 1000)
-            win_ms = parse_time_range(window)
             payload = build_traces_query_payload(
                 now_ms - win_ms, now_ms, filter_expr, limit=100
             )

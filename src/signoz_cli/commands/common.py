@@ -915,8 +915,6 @@ def _stringify_labels(data: Any) -> Any:
         if isinstance(row, dict) and "labels" in row:
             row = dict(row)
             row["labels"] = _flat(row["labels"])
-            for link_key in ("relatedTracesLink", "relatedLogsLink"):
-                row.pop(link_key, None)
         new_rows.append(row)
     return new_rows
 
@@ -944,9 +942,6 @@ def _unwrap_history_timeline(data: Any) -> Any:
                     else:
                         flat.append(str(lbl))
                 item["labels"] = flat
-            # long URLs are noise in table output; keep them for json
-            for link_key in ("relatedTracesLink", "relatedLogsLink"):
-                item.pop(link_key, None)
         rows.append(item)
 
     out: dict[str, Any] = {"data": rows}
@@ -1132,11 +1127,17 @@ def _flatten_field_values(data: Any) -> list[dict[str, Any]]:
 def _extract_alerts(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
-    raw_alerts = data.get("data", [])
+    raw_alerts = data.get("data", []) or []
     result = []
     for a in raw_alerts:
-        labels = a.get("labels", {})
-        status = a.get("status", {})
+        if not isinstance(a, dict):
+            continue
+        labels = a.get("labels")
+        status = a.get("status")
+        if not isinstance(labels, dict):
+            labels = {}
+        if not isinstance(status, dict):
+            status = {}
         result.append(
             {
                 "alertname": labels.get("alertname", ""),

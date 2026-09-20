@@ -346,35 +346,43 @@ def _to_yaml(data: Any, indent: int = 0) -> str:
     lines: list[str] = []
 
     if isinstance(data, dict):
+        if not data:
+            lines.append(f"{prefix}{{}}")
         for k, v in data.items():
-            if isinstance(v, dict):
-                lines.append(f"{prefix}{k}:")
+            if isinstance(v, dict) and v:
+                lines.append(f"{prefix}{_yaml_key(k)}:")
                 lines.append(_to_yaml(v, indent + 1))
-            elif isinstance(v, list):
-                lines.append(f"{prefix}{k}:")
+            elif isinstance(v, list) and v:
+                lines.append(f"{prefix}{_yaml_key(k)}:")
                 for item in v:
                     if isinstance(item, dict):
                         first = True
                         for ik, iv in item.items():
                             if first:
-                                lines.append(f"{prefix}  - {ik}: {_yaml_value(iv)}")
+                                lines.append(f"{prefix}  - {_yaml_key(ik)}: {_yaml_value(iv)}")
                                 first = False
                             else:
-                                lines.append(f"{prefix}    {ik}: {_yaml_value(iv)}")
+                                lines.append(f"{prefix}    {_yaml_key(ik)}: {_yaml_value(iv)}")
+                        if first:
+                            lines.append(f"{prefix}  - {{}}")
                     else:
                         lines.append(f"{prefix}  - {_yaml_value(item)}")
             else:
-                lines.append(f"{prefix}{k}: {_yaml_value(v)}")
+                lines.append(f"{prefix}{_yaml_key(k)}: {_yaml_value(v)}")
     elif isinstance(data, list):
+        if not data:
+            lines.append(f"{prefix}[]")
         for item in data:
             if isinstance(item, dict):
                 first = True
                 for k, v in item.items():
                     if first:
-                        lines.append(f"{prefix}- {k}: {_yaml_value(v)}")
+                        lines.append(f"{prefix}- {_yaml_key(k)}: {_yaml_value(v)}")
                         first = False
                     else:
-                        lines.append(f"  {k}: {_yaml_value(v)}")
+                        lines.append(f"  {_yaml_key(k)}: {_yaml_value(v)}")
+                if first:
+                    lines.append(f"{prefix}- {{}}")
             else:
                 lines.append(f"{prefix}- {_yaml_value(item)}")
     else:
@@ -383,18 +391,94 @@ def _to_yaml(data: Any, indent: int = 0) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _yaml_value(v: Any) -> str:
-    """Format a value for YAML output."""
+_YAML_NUMERIC = re.compile(
+    r"^[+-]?("
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|"
+    r"\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?|\.\d[\d_]*([eE][+-]?\d+)?"
+    r"|\.(inf|Inf|INF)|\.(nan|NaN|NAN))$"
+)
+_YAML_WORDS = frozenset(
+    "null Null NULL ~ true True TRUE false False FALSE "
+    "yes Yes YES no No NO on On ON off Off OFF".split()
+)
+
+
+def _yaml_needs_quotes(s: str) -> bool:
+    """Whether a string scalar must be quoted to survive a YAML round trip."""
+    if s == "" or s != s.strip():
+        return True
+    if "\n" in s or "\r" in s or "\t" in s:
+        return True
+    if s[0] in "-?:,[]{}#&*!|>'\"%@`":
+        return True
+    if s in _YAML_WORDS:
+        return True
+    if _YAML_NUMERIC.match(s):
+        return True
+    if ": " in s or " #" in s:
+        return True
+    # Legacy conservative set (colon, braces, etc. anywhere).
+    return any(c in s for c in ":#{}[]&*?|>!%@`")
+
+
+def _yaml_key(k: Any) -> str:
+    """Format a mapping key (quoted when needed for round-trip safety)."""
+    if isinstance(k, bool):
+        return "true" if k else "false"
+    if isinstance(k, (int, float)):
+        return str(k)
+    s = str(k)
+    if _yaml_needs_quotes(s):
+        return json.dumps(s, ensure_ascii=False)
+    return s
+
+
+def _yaml_flow(v: Any) -> str:
+    """Single-line flow-style YAML for arbitrarily nested values."""
     if v is None:
         return "null"
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
-        return str(v)
+        return _yaml_number(v)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False) if _yaml_needs_quotes(v) else v
+    if isinstance(v, list):
+        return "[" + ", ".join(_yaml_flow(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(
+            f"{_yaml_key(k)}: {_yaml_flow(x)}" for k, x in v.items()
+        ) + "}"
     s = str(v)
-    # Quote strings that could be misinterpreted
-    if s in ("", "true", "false", "null", "yes", "no") or any(c in s for c in ":#{}[]&*?|>!%@`"):
-        return f'"{s}"'
+    return json.dumps(s, ensure_ascii=False) if _yaml_needs_quotes(s) else s
+
+
+def _yaml_number(v: int | float) -> str:
+    """Format a number so it round-trips (non-finite floats need literals)."""
+    import math
+
+    if isinstance(v, float) and not math.isfinite(v):
+        return ".nan" if math.isnan(v) else (".inf" if v > 0 else "-.inf")
+    return str(v)
+
+
+def _yaml_value(v: Any) -> str:
+    """Format a value for YAML output (containers use flow style)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return _yaml_number(v)
+    if isinstance(v, (dict, list)):
+        # Nested containers render in flow style (block layout here would
+        # need indent tracking; flow is always valid YAML).
+        return _yaml_flow(v)
+    s = str(v)
+    if _yaml_needs_quotes(s):
+        # json.dumps quoting handles embedded quotes/newlines correctly
+        # (plain f'"{s}"' would emit invalid YAML for those).
+        return json.dumps(s, ensure_ascii=False)
     return s
 
 

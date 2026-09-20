@@ -99,7 +99,9 @@ class TestHistoryTimeline:
         assert out["nextCursor"] == "C2"
         row = out["data"][0]
         assert row["labels"] == ["severity=critical", "rawlabel"]
-        assert "relatedLogsLink" not in row
+        # Links are preserved for --json; table views prune them via
+        # table_keys instead of dropping data here.
+        assert row["relatedLogsLink"] == "long-url"
 
     def test_non_dict(self):
         assert _unwrap_history_timeline("x") == "x"
@@ -114,3 +116,28 @@ class TestStringifyLabels:
     def test_wrapped_in_data(self):
         data = {"data": [{"labels": []}]}
         assert _stringify_labels(data) == [{"labels": []}]
+
+
+class TestNullTolerantExtract:
+    def test_extract_alerts_none_data(self):
+        from signoz_cli.main import _extract_alerts
+
+        assert _extract_alerts({"status": "success", "data": None}) == []
+
+    def test_extract_alerts_non_dict_items(self):
+        from signoz_cli.main import _extract_alerts
+
+        data = {"status": "success",
+                "data": ["junk", 42, {"labels": {"alertname": "A"}}]}
+        rows = _extract_alerts(data)
+        assert len(rows) == 1
+        assert rows[0]["alertname"] == "A"
+
+    def test_extract_alerts_non_dict_labels(self):
+        from signoz_cli.main import _extract_alerts
+
+        data = {"status": "success",
+                "data": [{"labels": ["x"], "status": "bad"}]}
+        rows = _extract_alerts(data)
+        assert rows[0]["alertname"] == ""
+        assert rows[0]["state"] == ""
