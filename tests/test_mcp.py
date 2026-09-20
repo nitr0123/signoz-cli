@@ -124,14 +124,35 @@ class TestMutationGating:
 
 
 class TestStdioProtocol:
+    @staticmethod
+    def _signoz_bin():
+        """Locate the installed signoz entry point (PATH, venv, repo-local)."""
+        import os as _os
+        import shutil as _shutil
+        import sys as _sys
+
+        found = _shutil.which("signoz")
+        if found:
+            return found
+        for candidate in (
+            _os.path.join(_sys.prefix, "bin", "signoz"),
+            _os.path.join(".venv", "bin", "signoz"),
+        ):
+            if _os.path.isfile(candidate) and _os.access(candidate, _os.X_OK):
+                return candidate
+        return None
+
     def test_initialize_and_list_tools(self):
         import subprocess as _sp
 
         import signoz_cli.commands.mcp_server as _m
 
         assert _m.build_server is not None
+        binary = self._signoz_bin()
+        if binary is None:
+            pytest.skip("signoz entry point not installed")
         proc = _sp.Popen(
-            ["./.venv/bin/signoz", "mcp"],
+            [binary, "mcp"],
             stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
             text=True, bufsize=1,
         )
