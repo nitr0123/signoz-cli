@@ -1,6 +1,6 @@
 [project]
 name = "signoz-cli"
-version = "0.5.18"
+version = "0.5.19"
 description = "SigNoz CLI - query traces, logs, metrics, alerts, dashboards and services from SigNoz 0.138+"
 readme = "README.md"
 license = "Apache-2.0"
