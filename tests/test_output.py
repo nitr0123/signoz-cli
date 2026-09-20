@@ -622,11 +622,15 @@ class TestCharts:
         with pytest.raises(ValueError, match="plottable"):
             render_chart([])
 
-    def test_chart_flag_end_to_end(self):
+    def test_chart_flag_end_to_end(self, monkeypatch):
         from click.testing import CliRunner
 
         import signoz_cli.commands.common as cm
         from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
 
         class Fake:
             def __init__(self, *a, **k):
