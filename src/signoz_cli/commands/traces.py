@@ -27,7 +27,7 @@ from signoz_cli.commands.common import (
     _unwrap_v5,
     cli,
 )
-from signoz_cli.output import emit
+from signoz_cli.output import _safe_text, emit
 from signoz_cli.query import build_aggregate_query_payload, build_traces_query_payload
 from signoz_cli.timeutil import parse_time_range, resolve_timestamps
 
@@ -437,12 +437,12 @@ def traces_tail(
                         dur_ms = float(row.get("durationNano") or 0) / 1e6
                     except (TypeError, ValueError):
                         dur_ms = 0.0
-                    click.echo(
+                    click.echo(_safe_text(
                         f"{row.get('timestamp', '') or ''} "
                         f"{row.get('service.name', '') or ''} "
                         f"{row.get('name', '') or ''} "
                         f"{dur_ms:.2f}ms {row.get('traceID', '') or ''}"
-                    )
+                    ))
             while len(seen) > 50000:
                 seen.popitem(last=False)
             _time.sleep(interval)

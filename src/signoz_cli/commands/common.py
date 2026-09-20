@@ -718,7 +718,9 @@ def _record_history(args: list[str]) -> None:
             return
         if "-h" in args or "--help" in args:
             return
-        if "--token" in args:
+        # Never persist raw secrets: --token in either space or equals
+        # form disqualifies the whole invocation from recording.
+        if any(a == "--token" or a.startswith("--token=") for a in args):
             return
         import datetime
 
@@ -730,6 +732,10 @@ def _record_history(args: list[str]) -> None:
         path = _history_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     except Exception:
         pass
 

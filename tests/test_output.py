@@ -486,3 +486,50 @@ class TestYamlRoundTrip:
             assert _yaml.safe_load(_to_yaml(data)) == data
 
         check()
+
+
+class TestTerminalInjection:
+    EVIL = ("\x1b]0;PWNED\x07\x1b[2K\r[red]INJECTED[/red]"
+            "\x1b]8;;http://evil\x07click\x1b]8;;\x07")
+
+    def _table_text(self, rows):
+        import io as _io
+
+        from rich.console import Console
+
+        from signoz_cli.output import _dict_list_table
+
+        buf = _io.StringIO()
+        console = Console(file=buf, force_terminal=True, width=250)
+        _dict_list_table(console, rows)
+        return buf.getvalue()
+
+    def test_no_escape_sequences_reach_terminal(self):
+        out = self._table_text([{"service": "svc", "body": self.EVIL}])
+        assert "\x1b]0;" not in out
+        assert "\x1b]8;;" not in out
+        assert "\x07" not in out
+        # Rich's own styling escapes are fine; payload must not add any.
+        assert "PWNED" not in out or "\x1b]0" not in out
+
+    def test_markup_link_neutralized_but_readable(self):
+        out = self._table_text([{"body": "[link=http://evil]click[/link]"}])
+        assert "]8;;" not in out
+        assert "click" in out
+
+    def test_control_chars_stripped(self):
+        from signoz_cli.output import _safe_text
+
+        assert _safe_text("a\x00b\x1fc\x7fd") == "abcd"
+        assert _safe_text("[prod]") == "\\[prod]"
+        assert _safe_text("plain") == "plain"
+
+    def test_machine_formats_stay_byte_faithful(self, capsys):
+        import json as _json
+
+        rows = [{"body": self.EVIL}]
+        emit(rows, "json")
+        assert _json.loads(capsys.readouterr().out) == rows
+        emit(rows, "csv")
+        out = capsys.readouterr().out
+        assert "PWNED" in out  # CSV keeps raw bytes for pipelines

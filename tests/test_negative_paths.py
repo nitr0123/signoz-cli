@@ -1124,3 +1124,34 @@ class TestTailWindowValidation:
         result = runner.invoke(cli, argv)
         assert result.exit_code == 2, result.output
         assert "Invalid time range" in result.output
+
+
+class TestHistorySecretForms:
+    def test_token_equals_form_never_recorded(self, runner, monkeypatch, tmp_path):
+        import sys as _sys
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            _sys, "argv",
+            ["signoz", "logs", "search", "--token=SUPERSECRET"])
+
+        from signoz_cli.commands.common import _record_history
+
+        _record_history(["logs", "search", "--token=SUPERSECRET"])
+        assert not (tmp_path / "history.json").exists()
+
+    def test_history_file_is_owner_only(self, runner, monkeypatch, tmp_path):
+        import stat as _stat
+
+        from signoz_cli.commands.common import _record_history
+
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR", tmp_path)
+        _record_history(["logs", "search", "--limit", "3"])
+        mode = _stat.S_IMODE((tmp_path / "history.json").stat().st_mode)
+        assert mode == 0o600
