@@ -70,6 +70,27 @@ def _sweep_stale_tmps(max_age_s: float = 3600.0) -> None:
         pass
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write *text* to *path*, creating the file with mode 0600 from birth.
+
+    Plain ``Path.write_text`` creates the file under the process umask
+    (typically 0644) and a later ``chmod`` only narrows it afterwards --
+    leaving a window where another local user can read secrets (tokens)
+    from the new file. ``os.open`` with an explicit mode never grants
+    more than 0600 regardless of umask.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
 def save_config(data: dict[str, Any]) -> None:
     """Save config to ~/.signoz/config.json (atomically, mode 0600).
 
@@ -80,7 +101,7 @@ def save_config(data: dict[str, Any]) -> None:
     _sweep_stale_tmps()
     tmp_path = CONFIG_DIR / f".config.json.{os.getpid()}.tmp"
     try:
-        tmp_path.write_text(json.dumps(data, indent=2) + "\n")
+        _write_private(tmp_path, json.dumps(data, indent=2) + "\n")
         tmp_path.chmod(0o600)
         os.replace(tmp_path, CONFIG_FILE)
     finally:

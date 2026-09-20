@@ -883,7 +883,11 @@ def _record_history(args: list[str]) -> None:
         })
         path = _history_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
+        # Private from birth (see config._write_private): history once
+        # held raw --token values in older releases.
+        from signoz_cli.config import _write_private
+
+        _write_private(path, json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
         try:
             path.chmod(0o600)
         except OSError:

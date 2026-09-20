@@ -213,3 +213,38 @@ class TestMalformedScalars:
         assert result.exit_code in (0, 2)
         assert result.exception is None or isinstance(
             result.exception, SystemExit)
+
+
+class TestPrivateFileCreation:
+    def test_tmp_created_owner_only(self, tmp_path):
+        import os as _os
+        import stat as _stat
+
+        from signoz_cli.config import _write_private
+
+        target = tmp_path / "secret.json"
+        _write_private(target, '{"token": "x"}')
+        assert target.read_text() == '{"token": "x"}'
+        # Simulate a permissive umask: mode must still be <= 0600.
+        old = _os.umask(0o022)
+        try:
+            target2 = tmp_path / "secret2.json"
+            _write_private(target2, "y")
+            mode = _stat.S_IMODE(target2.stat().st_mode)
+        finally:
+            _os.umask(old)
+        assert mode == 0o600, oct(mode)
+
+    def test_save_config_roundtrip_private(self, tmp_path, monkeypatch):
+        import stat as _stat
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+
+        from signoz_cli.config import load_config, save_config
+
+        save_config({"profiles": {"p": {"token": "t"}}})
+        assert load_config()["profiles"]["p"]["token"] == "t"
+        assert _stat.S_IMODE(
+            (tmp_path / "config.json").stat().st_mode) == 0o600
