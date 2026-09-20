@@ -1,6 +1,7 @@
 """Tests for profile-aware config handling."""
 
-
+import pytest
+from click.testing import CliRunner
 
 from signoz_cli.config import (
     get_profile_credentials,
@@ -9,6 +10,11 @@ from signoz_cli.config import (
     save_config,
     select_profile_name,
 )
+
+
+@pytest.fixture()
+def runner():
+    return CliRunner()
 
 
 def _isolate(tmp_path, monkeypatch):
@@ -100,3 +106,110 @@ class TestProfileHelpers:
         original = self._cfg()
         save_config(original)
         assert load_config() == original
+
+
+class TestMalformedProfiles:
+    def test_non_dict_entries_dropped(self):
+        from signoz_cli.config import get_profiles
+
+        cfg = {"profiles": {"good": {"endpoint": "http://h:8080"},
+                            "bad": "oops", "num": 42, "nil": None}}
+        assert get_profiles(cfg) == {"good": {"endpoint": "http://h:8080"}}
+        assert get_profiles({"profiles": "oops"}) == {}
+        assert get_profiles({}) == {}
+
+    def test_list_survives_bad_entry(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        from signoz_cli.main import cli
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        (tmp_path / "config.json").write_text(_json.dumps({
+            "default": "q",
+            "profiles": {"p": "not-a-dict",
+                         "q": {"endpoint": "http://h:8080", "token": "t"}}}))
+        result = runner.invoke(cli, ["profile", "list"])
+        assert result.exit_code == 0, result.output
+        assert result.exception is None
+
+    def test_use_of_bad_entry_is_clean_usage_error(
+            self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        from signoz_cli.main import cli
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        (tmp_path / "config.json").write_text(_json.dumps(
+            {"profiles": {"p": "not-a-dict"}}))
+        result = runner.invoke(cli, ["logs", "search", "-p", "p"])
+        assert result.exit_code == 2
+        assert "Unknown profile" in result.output
+        assert result.exception is None or isinstance(
+            result.exception, SystemExit)
+
+
+class TestMalformedScalars:
+    def _write(self, tmp_path, cfg):
+        import json as _json
+
+        (tmp_path / "config.json").write_text(_json.dumps(cfg))
+
+    def _isolate_cfg(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_FILE",
+            tmp_path / "config.json")
+
+    def test_non_string_endpoint_rejected(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._isolate_cfg(monkeypatch, tmp_path)
+        self._write(tmp_path, {"default": "p", "profiles": {
+            "p": {"endpoint": 123, "token": "t"}}})
+        result = runner.invoke(cli, ["logs", "search"])
+        assert result.exit_code == 2
+        assert "Invalid endpoint" in result.output
+        assert result.exception is None or isinstance(
+            result.exception, SystemExit)
+
+    def test_non_string_default_rejected(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._isolate_cfg(monkeypatch, tmp_path)
+        self._write(tmp_path, {"default": ["x"], "profiles": {
+            "p": {"endpoint": "http://h:1", "token": "t"}}})
+        result = runner.invoke(cli, ["logs", "search"])
+        assert result.exit_code == 2
+        assert "Invalid default profile" in result.output
+
+    def test_non_string_time_range_rejected(
+            self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._isolate_cfg(monkeypatch, tmp_path)
+        self._write(tmp_path, {"default": "p", "profiles": {
+            "p": {"endpoint": "http://h:1", "token": "t",
+                  "default_time_range": 123}}})
+        result = runner.invoke(cli, ["logs", "search"])
+        assert result.exit_code == 2
+        assert "Invalid default_time_range" in result.output
+
+    def test_non_string_token_never_tracebacks(
+            self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._isolate_cfg(monkeypatch, tmp_path)
+        self._write(tmp_path, {"default": "p", "profiles": {
+            "p": {"endpoint": "http://h:1", "token": 99}}})
+        result = runner.invoke(cli, ["auth", "whoami", "-p", "p"])
+        assert result.exit_code in (0, 2)
+        assert result.exception is None or isinstance(
+            result.exception, SystemExit)
