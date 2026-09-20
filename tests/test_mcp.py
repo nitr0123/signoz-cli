@@ -14,6 +14,11 @@ def _reset_server_state(monkeypatch):
     monkeypatch.setattr(mcp_server, "_ALLOW_MUTATIONS", False)
     monkeypatch.setattr(mcp_server, "_DEFAULT_PROFILE", None)
     monkeypatch.setattr(mcp_server, "_DEFAULT_ENDPOINT", None)
+    # Tool functions resolve auth like the CLI; pin dummy credentials so
+    # tests never depend on ambient env or a real ~/.signoz config.
+    monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+    monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+    monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
 
 
 @pytest.fixture()
