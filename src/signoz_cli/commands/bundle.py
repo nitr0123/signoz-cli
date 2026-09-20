@@ -75,9 +75,11 @@ def _fetch_full(client, kind: str, item: dict[str, Any]) -> dict[str, Any] | Non
         else:  # pragma: no cover - guarded by _list_items
             return item
     except Exception as ex:
+        from signoz_cli.output import _safe_plain
+
         click.echo(
-            f"Warning: skipping {kind} '{_item_name(kind, item)}' "
-            f"({item_id}): {ex}",
+            f"Warning: skipping {kind} '{_safe_plain(_item_name(kind, item))}' "
+            f"({item_id}): {_safe_plain(ex)}",
             err=True,
         )
         return None

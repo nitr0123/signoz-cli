@@ -837,6 +837,8 @@ def _traces_query_all(
 
 def _warn_v5(data: Any) -> None:
     """Print server-side warnings from a v5 response (e.g. no-data notices)."""
+    from signoz_cli.output import _safe_plain
+
     try:
         warnings = data["data"]["meta"]["warning"]["warnings"] or []
     except (KeyError, TypeError):
@@ -844,7 +846,7 @@ def _warn_v5(data: Any) -> None:
     for w in warnings:
         msg = w.get("message", "") if isinstance(w, dict) else str(w)
         if msg:
-            click.echo(f"Warning: {msg}", err=True)
+            click.echo(f"Warning: {_safe_plain(msg)}", err=True)
 
 
 def _unwrap_v5(data: Any, agg_label: str | None = None) -> Any:

@@ -543,11 +543,18 @@ class SigNozClient:
 
 
 def _extract_error(resp: httpx.Response) -> str:
-    """Pull a human-readable message out of a SigNoz error response."""
+    """Pull a human-readable message out of a SigNoz error response.
+
+    The message is server-controlled: strip terminal control bytes so
+    hostile error text cannot inject escape sequences into the caller's
+    terminal when the error is reported on stderr.
+    """
+    from signoz_cli.output import _safe_plain
+
     try:
         body = resp.json()
     except ValueError:
-        return resp.text[:500]
+        return _safe_plain(resp.text[:500])
 
     # SigNoz error envelope: {"error": {"code": ..., "message": ...}} or {"message": ...}
     if isinstance(body, dict):
@@ -555,8 +562,8 @@ def _extract_error(resp: httpx.Response) -> str:
         if isinstance(err, dict):
             code = err.get("code", "")
             msg = err.get("message", "")
-            return f"{code}: {msg}" if code else msg
+            return _safe_plain(f"{code}: {msg}" if code else msg)
         for key in ("message", "error", "detail"):
             if key in body:
-                return str(body[key])
-    return str(body)[:500]
+                return _safe_plain(str(body[key]))
+    return _safe_plain(str(body)[:500])

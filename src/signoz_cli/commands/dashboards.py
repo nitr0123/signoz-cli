@@ -229,7 +229,9 @@ def dashboards_diff(
             f"server:{dashboard_id}", f"file:{json_file}",
         )
         if delta:
-            click.echo(delta)
+            from signoz_cli.output import _safe_plain
+
+            click.echo(_safe_plain(delta))
         else:
             click.echo("(no changes)")
     except Exception as e:
