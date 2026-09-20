@@ -297,6 +297,25 @@ signoz query my-query.json
 
 See the [Query Builder v5 docs](https://signoz.io/docs/userguide/query-builder-v5/) for the JSON schema.
 
+### MCP server (AI assistants)
+
+```shell
+signoz mcp -p prod                  # read-only tools (default)
+signoz mcp -p prod --allow-mutations
+```
+
+Point any MCP host at it (Claude Code `~/.claude.json`, Claude Desktop config):
+
+```json
+{"mcpServers": {"signoz": {"command": "signoz", "args": ["mcp", "-p", "prod"]}}}
+```
+
+29 tools: log/trace/metric search, PromQL/SQL, dashboards, alerts (+history/test),
+services, views, channels, server status. Mutating tools (create/update/delete)
+refuse unless started with `--allow-mutations`. Authentication comes from
+profiles/env vars as usual — tokens are never tool arguments, so API keys
+can't land in agent transcripts.
+
 ## Time Ranges
 
 Most commands support flexible time parameters:
