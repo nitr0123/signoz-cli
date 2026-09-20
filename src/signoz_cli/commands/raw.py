@@ -8,6 +8,7 @@ from signoz_cli.commands.common import (
     _common_options,
     _get_client,
     _handle_error,
+    _maybe_emit_chart,
     _profile_time_range,
     _read_json,
     _time_options,
@@ -41,6 +42,8 @@ def query_raw(endpoint: str | None, token: str | None, fmt: str,
 @_common_options
 @click.argument("query")
 @click.option("--step", type=int, default=60, show_default=True, help="Step seconds.")
+@click.option("--chart", is_flag=True,
+              help="Render time series as ASCII sparklines.")
 @_time_options(default_range="1h")
 def promql_query(
     endpoint: str | None,
@@ -49,6 +52,7 @@ def promql_query(
     profile: str | None,
     query: str,
     step: int,
+    chart: bool,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -66,8 +70,10 @@ def promql_query(
         s, e = resolve_timestamps(start, end, time_range, default_range="1h", profile_time_range=_profile_time_range(profile))
         resp = client.query_promql(query, s, e, step=step)
         _warn_v5(resp)
-        emit(_unwrap_time_series(resp), fmt,
-             table_keys=["series", "timestamp", "value"])
+        rows = _unwrap_time_series(resp)
+        if _maybe_emit_chart(rows, fmt, chart):
+            return
+        emit(rows, fmt, table_keys=["series", "timestamp", "value"])
     except Exception as ex:
         _handle_error(ex)
 
@@ -75,6 +81,8 @@ def promql_query(
 @cli.command("sql")
 @_common_options
 @click.argument("query")
+@click.option("--chart", is_flag=True,
+              help="Render series/timestamp/value rows as ASCII sparklines.")
 @_time_options(default_range="6h")
 def sql_query(
     endpoint: str | None,
@@ -82,6 +90,7 @@ def sql_query(
     fmt: str,
     profile: str | None,
     query: str,
+    chart: bool,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -96,7 +105,10 @@ def sql_query(
         client = _get_client(endpoint, token, profile)
         s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
         resp = client.query_sql(query, s, e)
-        emit(_unwrap_v5(resp), fmt)
+        rows = _unwrap_v5(resp)
+        if _maybe_emit_chart(rows, fmt, chart):
+            return
+        emit(rows, fmt)
     except Exception as ex:
         _handle_error(ex)
 

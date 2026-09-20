@@ -343,6 +343,92 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------------------
 # YAML output (PyYAML)
+# ASCII charts (sparklines for time series)
+# ---------------------------------------------------------------------------
+
+_SPARK_LEVELS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: list[float], width: int) -> str:
+    """Render values as a block-element sparkline exactly *width* wide.
+
+    Downsamples by bucket mean when there are more points than columns;
+    repeats the last value when fewer. A flat series renders mid-level.
+    """
+    if width <= 0:
+        return ""
+    if not values:
+        return " " * width
+    n = len(values)
+    if n >= width:
+        sampled = []
+        for i in range(width):
+            lo_i = int(i * n / width)
+            hi_i = max(lo_i + 1, int((i + 1) * n / width))
+            chunk = values[lo_i:hi_i]
+            sampled.append(sum(chunk) / len(chunk))
+    else:
+        sampled = list(values) + [values[-1]] * (width - n)
+    lo, hi = min(sampled), max(sampled)
+    if hi == lo:
+        return "▄" * width
+    span = hi - lo
+    return "".join(
+        _SPARK_LEVELS[min(7, int((v - lo) / span * 8))] for v in sampled
+    )
+
+
+def render_chart(rows: list[dict[str, Any]], width: int | None = None) -> str:
+    """Render (series, timestamp, value) rows as labelled sparklines.
+
+    One line per series: ``<series> <spark> last=<v> min=<v> max=<v>``.
+    Series labels are sanitized for plain terminal output; rows missing
+    numeric values are skipped. Raises ``ValueError`` when no plottable
+    rows remain (caller maps to a usage error).
+    """
+    import shutil as _shutil
+
+    grouped: dict[str, list[tuple[Any, float]]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        series = row.get("series", "")
+        raw_value = row.get("value")
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(str(series), []).append((row.get("timestamp"), value))
+    if not grouped:
+        raise ValueError(
+            "Nothing plottable: --chart needs rows with "
+            "series/timestamp/numeric-value fields."
+        )
+    term_width = width or _shutil.get_terminal_size((80, 24)).columns
+    label_width = min(32, max(len(s) for s in grouped) + 1)
+    spark_width = max(10, term_width - label_width - 34)
+    lines = []
+    for series in sorted(grouped):
+        points = sorted(grouped[series], key=lambda p: (p[0] is None, p[0]))
+        values = [v for _, v in points]
+        last, lo, hi = values[-1], min(values), max(values)
+        lines.append(
+            f"{_safe_plain(series)[:label_width - 1]:<{label_width}}"
+            f"{_sparkline(values, spark_width)} "
+            f"last={last:g} min={lo:g} max={hi:g}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def emit_chart(rows: list[dict[str, Any]]) -> None:
+    """Write chart rendering through the standard output routing."""
+    _write(render_chart(rows))
+
+
+# ---------------------------------------------------------------------------
+# YAML output (PyYAML)
 # ---------------------------------------------------------------------------
 
 def _yaml_sanitize(data: Any) -> Any:

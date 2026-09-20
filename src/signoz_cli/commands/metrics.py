@@ -13,6 +13,7 @@ from signoz_cli.commands.common import (
     _flatten_field_values,
     _get_client,
     _handle_error,
+    _maybe_emit_chart,
     _pagination_meta,
     _profile_time_range,
     _time_options,
@@ -161,6 +162,8 @@ def _resolve_metric_temporality(
 @click.option("--filter", "filter_expr", default="", help="Filter expression.")
 @click.option("--step", type=int, default=60, show_default=True,
               help="Step interval in seconds.")
+@click.option("--chart", is_flag=True,
+              help="Render time series as ASCII sparklines.")
 @_time_options(default_range="1h")
 def metrics_query(
     endpoint: str | None,
@@ -174,6 +177,7 @@ def metrics_query(
     group_by: str | None,
     filter_expr: str,
     step: int,
+    chart: bool,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -213,6 +217,8 @@ def metrics_query(
         rows = _unwrap_time_series(resp)
         if not rows:
             _warn_empty_metrics(metric_name)
+        if _maybe_emit_chart(rows, fmt, chart):
+            return
         emit(rows, fmt,
              table_keys=["series", "timestamp", "value"])
     except Exception as ex:

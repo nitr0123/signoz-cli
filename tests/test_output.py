@@ -579,3 +579,77 @@ class TestPlainOutputSanitization:
                                           "--token", "tok-123456789"])
         assert result.exit_code == 1
         assert "\x1b" not in (result.output or "")
+
+
+
+class TestCharts:
+    def test_sparkline_exact_shape(self):
+        from signoz_cli.output import _sparkline
+
+        assert _sparkline([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 8) == "▁▂▃▄▅▆▇█"
+        assert _sparkline([5.0, 5.0, 5.0], 3) == "▄▄▄"
+        assert _sparkline([], 4) == "    "
+        assert _sparkline([1.0], 0) == ""
+
+    def test_sparkline_downsamples(self):
+        from signoz_cli.output import _sparkline
+
+        out = _sparkline([float(i) for i in range(100)], 10)
+        assert len(out) == 10
+        assert out[0] == "▁" and out[-1] == "█"
+
+    def test_render_chart_groups_and_stats(self):
+        from signoz_cli.output import render_chart
+
+        rows = [
+            {"series": "a", "timestamp": 1, "value": 1.0},
+            {"series": "a", "timestamp": 2, "value": 3.0},
+            {"series": "b", "timestamp": 1, "value": 10.0},
+            {"series": "b", "timestamp": 2, "value": 10.0},
+            {"series": "evil\x1b[2K", "timestamp": 1, "value": 2.0},
+        ]
+        out = render_chart(rows, width=60)
+        assert "last=3" in out and "min=1" in out and "max=3" in out
+        assert "\x1b" not in out
+
+    def test_render_chart_rejects_garbage(self):
+        import pytest
+
+        from signoz_cli.output import render_chart
+
+        with pytest.raises(ValueError, match="plottable"):
+            render_chart([{"foo": "bar"}])
+        with pytest.raises(ValueError, match="plottable"):
+            render_chart([])
+
+    def test_chart_flag_end_to_end(self):
+        from click.testing import CliRunner
+
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_promql(self, *a, **k):
+                return {"data": {"data": {"results": [{
+                    "aggregations": [{"series": [{
+                        "labels": [{"key": "s", "value": "x"}],
+                        "values": [{"timestamp": 1, "value": 2.0},
+                                   {"timestamp": 2, "value": 4.0}]}]}]}]}}}
+
+        saved = cm.SigNozClient
+        cm.SigNozClient = Fake
+        try:
+            result = CliRunner().invoke(cli, ["promql", "up", "--chart"])
+            assert result.exit_code == 0, result.output
+            assert "last=4" in result.output
+            bad = CliRunner().invoke(cli, ["promql", "up", "--chart", "--json"])
+            assert bad.exit_code == 2
+            assert "--chart" in bad.output
+        finally:
+            cm.SigNozClient = saved
