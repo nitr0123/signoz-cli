@@ -196,6 +196,31 @@ Since these reviews began, merged via PRs (all CI-green, auto-released):
 - **PR #11** — `--field-selector` malformed-part rejection, unknown-profile
   fail-fast (flag+env), schemeless endpoint `http://` prepend, `alerts test`
   non-object rejection.
+- **PR #23** — terminal injection in table rendering (`_safe_text`),
+  `--token=` history guard bypass, `history.json` 0600.
+- **PR #24 (security round 1)** — endpoint URLs embedding userinfo
+  (`https://user:pass@host`) rejected fail-fast at resolve/configure
+  time (they flowed into history, displays, stored configs); history
+  skips userinfo invocations and redacts legacy secrets on display;
+  `rerun` refuses poisoned legacy entries; registry index credentials
+  moved from ps-visible argv to `PIP_INDEX_URL` env; upgrade
+  descriptions redacted.
+- **PR #25 (security round 2)** — server-controlled text in plain-output
+  paths sanitized (`_safe_plain`: API errors, v5 warnings, export-skip
+  notices, diffs, tail/watch loops; brackets preserved where Rich
+  markup is inert).
+- **PR #26 (security round 3)** — 32MiB JSON intake cap (files+stdin),
+  bundle-import symlink/escape guard (realpath containment), export
+  filename-collision suffixes.
+- **PR #27 (security rounds 4-6 + final pass)** — pip-git upgrade
+  instructions redacted; export/import confirms honor `--no-input`;
+  views overwrite restores the old doc on replacement failure; profile
+  `insecure` strict truthiness (`"false"` no longer disables TLS);
+  malformed configs (non-object profiles, non-string endpoint/token/
+  default/time-range) fail closed with exit-2 guidance.
+  Cleared with evidence: hostile tag refs vs `_parse_version` gate,
+  redirects never followed, Retry-After capped, `install.sh` quoted,
+  `history --clear` promptless by design.
 
 ---
 
