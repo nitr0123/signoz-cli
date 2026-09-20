@@ -14,6 +14,8 @@ from signoz_cli.commands.common import (
     _handle_error,
     _is_supported_server,
     _mask_token,
+    _redact_userinfo,
+    _reject_endpoint_userinfo,
     _resolve_credentials,
     _set_json_flag,
     cli,
@@ -61,6 +63,7 @@ def configure(
     """
     cfg = load_config()
     profiles = get_profiles(cfg)
+    _reject_endpoint_userinfo(endpoint, source="--endpoint")
     profiles[profile_name] = {
         "endpoint": endpoint.rstrip("/"),
         "token": token,
@@ -84,7 +87,7 @@ def configure(
         cfg["default"] = profile_name
     save_config(cfg)
     click.echo(f"Profile '{profile_name}' saved to {CONFIG_FILE} "
-               f"(endpoint: {profiles[profile_name]['endpoint']})")
+                f"(endpoint: {_redact_userinfo(profiles[profile_name]['endpoint'])})")
     click.echo(f"Use it with: signoz -p {profile_name} <command>  "
                f"or export SIGNOZ_PROFILE={profile_name}")
 
@@ -112,7 +115,7 @@ def profile_list(fmt: str) -> None:
         p = profiles[name]
         rows.append({
             "name": name,
-            "endpoint": p.get("endpoint", ""),
+            "endpoint": _redact_userinfo(p.get("endpoint", "")),
             "token": _mask_token(p.get("token")),
             "default": "*" if name == cfg.get("default") else "",
             "default_time_range": p.get("default_time_range", ""),
@@ -121,7 +124,7 @@ def profile_list(fmt: str) -> None:
     if not rows and cfg.get("endpoint"):
         rows.append({
             "name": "(legacy)",
-            "endpoint": cfg["endpoint"],
+            "endpoint": _redact_userinfo(cfg["endpoint"]),
             "token": _mask_token(cfg.get("token")),
             "default": "*",
             "default_time_range": "",
@@ -152,7 +155,7 @@ def profile_show(name: str) -> None:
         raise click.UsageError(f"Unknown profile '{name}'. See 'signoz profile list'.")
     emit({
         "name": name,
-        "endpoint": prof.get("endpoint", ""),
+        "endpoint": _redact_userinfo(prof.get("endpoint", "")),
         "token": _mask_token(prof.get("token")),
         "default": name == cfg.get("default"),
         "default_time_range": prof.get("default_time_range", ""),
@@ -197,7 +200,7 @@ def auth_whoami(endpoint: str | None, token: str | None, profile_name: str | Non
     ep, tok = _resolve_credentials(endpoint, token, profile_name)
     cfg = load_config()
     selected = select_profile_name(cfg, profile_name, os.getenv("SIGNOZ_PROFILE"))
-    click.echo(f"Endpoint: {ep or '<not set>'}")
+    click.echo(f"Endpoint: {_redact_userinfo(ep) if ep else '<not set>'}")
     click.echo(f"Token:    {_mask_token(tok)}")
     click.echo(f"Profile:  {selected or '<none>'}")
     click.echo(f"Config:   {CONFIG_FILE}")

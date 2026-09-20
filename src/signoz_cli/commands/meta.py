@@ -8,9 +8,11 @@ from signoz_cli.commands.common import (
     _common_options,
     _get_client,
     _handle_error,
+    _has_url_userinfo,
     _history_path,
     _is_supported_server,
     _read_history,
+    _redact_userinfo,
     _selected_profile_name,
     cli,
 )
@@ -308,6 +310,45 @@ Stay current:
 
 
 
+def _display_history_command(entry: dict) -> str:
+    """Render a history entry for display with secrets redacted.
+
+    Entries recorded by older releases may contain ``--token`` values or
+    endpoint URLs with embedded credentials; never echo those back to
+    the terminal (shoulder surfing, scrollback, tee'd logs).
+    """
+    out: list[str] = []
+    skip_next = False
+    for arg in entry.get("argv", []):
+        if skip_next:
+            out.append("<redacted>")
+            skip_next = False
+            continue
+        if arg == "--token":
+            out.append(arg)
+            skip_next = True
+        elif arg.startswith("--token="):
+            out.append("--token=<redacted>")
+        elif _has_url_userinfo(arg):
+            out.append(_redact_userinfo(arg))
+        else:
+            out.append(arg)
+    return "signoz " + " ".join(out)
+
+
+def _history_entry_has_secret(argv: list) -> bool:
+    """Whether a recorded argv carries raw secrets (legacy poisoned entry)."""
+    it = iter(argv)
+    for arg in it:
+        if not isinstance(arg, str):
+            continue
+        if arg == "--token" or arg.startswith("--token="):
+            return True
+        if _has_url_userinfo(arg):
+            return True
+    return False
+
+
 @cli.command("history")
 @click.option("--clear", is_flag=True, help="Erase the recorded query history.")
 def history_cmd(clear: bool) -> None:
@@ -323,7 +364,7 @@ def history_cmd(clear: bool) -> None:
         entries = _read_history()
         emit(
             [
-                {"index": i, "ts": e.get("ts", ""), "command": "signoz " + " ".join(e.get("argv", []))}
+                {"index": i, "ts": e.get("ts", ""), "command": _display_history_command(e)}
                 for i, e in enumerate(entries)
             ],
             "table",
@@ -348,6 +389,16 @@ def rerun_cmd(index: int) -> None:
         argv = entries[index].get("argv", [])
         if not argv:
             raise click.UsageError(f"History entry {index} has no command.")
+        if _history_entry_has_secret(argv):
+            # Legacy entry recorded before the never-store-secrets guard:
+            # re-executing would splash the secret into the new process
+            # argv (ps-visible). Refuse; the user can retype the command
+            # with --token passed securely.
+            raise click.UsageError(
+                f"History entry {index} contains a raw secret (recorded by an "
+                "older release). It will not be re-executed; retype the "
+                "command instead, or run 'signoz history --clear'."
+            )
         import os as _os
 
         try:

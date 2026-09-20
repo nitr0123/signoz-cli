@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 import click
 
@@ -13,6 +14,7 @@ from signoz_cli.commands.common import (
     _handle_error,
     _latest_remote_tag,
     _parse_version,
+    _redact_userinfo,
     cli,
 )
 
@@ -44,17 +46,30 @@ def _pipx_upgrade_command(meta_path: str, repo: str) -> list[str] | None:
     return ["pipx", "install", "--force", f"{spec}=={{tag}}"]
 
 
+def _describe_upgrade_argv(argv: list[str]) -> str:
+    """Render an upgrade command for display with credentials redacted.
+
+    The executed argv may carry registry credentials (pipx git URLs,
+    index URLs); the human-readable description must never echo them
+    (shoulder surfing, scrollback, tee'd logs).
+    """
+    return " ".join(_redact_userinfo(c) for c in argv)
+
+
 def _pypi_index_url() -> str | None:
     """Registry index URL, or None when the user hasn't configured one."""
     return os.getenv("SIGNOZ_PYPI_INDEX") or None
 
 
-def _detect_install_method() -> tuple[str, list[str] | None, str]:
+def _detect_install_method() -> tuple[str, Any, str]:
     """Detect how this copy was installed.
 
-    Returns (method, upgrade_argv_or_None, instructions). ``upgrade_argv``
-    is None when upgrading must be done by hand (source checkouts), or
-    when credentials are missing (index installs without SIGNOZ_PYPI_INDEX).
+    Returns (method, upgrade_or_None, instructions). ``upgrade`` is
+    either an argv list, or an ``(env, argv)`` tuple when the upgrade
+    needs extra environment (registry credentials, which must never
+    travel via ps-visible argv). It is None when upgrading must be
+    done by hand (source checkouts), or when credentials are missing
+    (index installs without SIGNOZ_PYPI_INDEX).
     """
     import importlib.metadata
     from pathlib import Path
@@ -67,9 +82,9 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
     if os.path.exists(meta_path):
         cmd = _pipx_upgrade_command(meta_path, repo)
         if cmd is not None:
-            return ("pipx", cmd, " ".join(cmd).replace("{tag}", "<tag>"))
+            return ("pipx", cmd, _describe_upgrade_argv(cmd).replace("{tag}", "<tag>"))
         cmd = ["pipx", "install", "--force", f"git+{repo}@{{tag}}"]
-        return ("pipx", cmd, " ".join(cmd).replace("{tag}", "<tag>"))
+        return ("pipx", cmd, _describe_upgrade_argv(cmd).replace("{tag}", "<tag>"))
     try:
         dist = importlib.metadata.distribution("signoz-cli")
         direct_url = dist.read_text("direct_url.json")
@@ -112,12 +127,17 @@ def _detect_install_method() -> tuple[str, list[str] | None, str]:
                 f"(e.g. {DEFAULT_PYPI_INDEX} with credentials), then "
                 "re-run with --apply",
             )
+        # NOTE: the index URL (which embeds registry credentials) is
+        # passed via the environment, never via argv: argv is visible to
+        # other users through `ps`, and the upgrade description is
+        # echoed to the terminal. Upgrade specs carrying an env mapping
+        # are (env, argv) tuples; plain argv lists need no extra env.
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
-               "--index-url", index,
-               "--extra-index-url", "https://pypi.org/simple",
                "signoz-cli=={tag}"]
-        shown = " ".join(cmd).replace("{tag}", "<tag>")
-        return ("pip", cmd, shown)
+        env = {"PIP_INDEX_URL": index,
+               "PIP_EXTRA_INDEX_URL": "https://pypi.org/simple"}
+        shown = _describe_upgrade_argv(cmd).replace("{tag}", "<tag>")
+        return ("pip", (env, cmd), shown)
     return (
         "unknown",
         None,
@@ -163,8 +183,16 @@ def update_cmd(apply: bool) -> None:
             )
         import subprocess
 
+        extra_env: dict[str, str] = {}
+        if (isinstance(upgrade_argv, tuple)
+                and len(upgrade_argv) == 2
+                and isinstance(upgrade_argv[0], dict)):
+            # (env, argv) spec: credentials via environment, not argv.
+            extra_env, upgrade_argv = upgrade_argv
         cmd = [c.replace("{tag}", latest) for c in upgrade_argv]
-        proc = subprocess.run(cmd, timeout=300)
+        run_env = dict(os.environ)
+        run_env.update(extra_env)
+        proc = subprocess.run(cmd, timeout=300, env=run_env)
         if proc.returncode != 0:
             raise click.UsageError(
                 f"Upgrade command failed with exit {proc.returncode}."

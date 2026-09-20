@@ -1155,3 +1155,33 @@ class TestHistorySecretForms:
         _record_history(["logs", "search", "--limit", "3"])
         mode = _stat.S_IMODE((tmp_path / "history.json").stat().st_mode)
         assert mode == 0o600
+
+
+class TestHistorySecretRedaction:
+    def test_display_redacts_token_and_userinfo(self):
+        from signoz_cli.commands.meta import _display_history_command as show
+
+        out = show({"argv": ["logs", "search", "--token", "SUPERSECRET"]})
+        assert "SUPERSECRET" not in out
+        assert "<redacted>" in out
+        out = show({"argv": ["logs", "search", "--token=SUPERSECRET"]})
+        assert "SUPERSECRET" not in out
+        out = show({"argv": ["logs", "search", "--endpoint",
+                             "https://bob:pw@h:8080"]})
+        assert "bob:pw@" not in out
+        assert "<redacted>" in out
+
+    def test_rerun_refuses_secret_entries(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        from signoz_cli.main import cli
+
+        monkeypatch.setattr("signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        (tmp_path / "history.json").write_text(_json.dumps([
+            {"ts": "t", "argv": ["logs", "search", "--token", "SUPERSECRET"]},
+            {"ts": "t", "argv": ["logs", "search"]},
+        ]))
+        result = runner.invoke(cli, ["rerun", "0"])
+        assert result.exit_code == 2
+        assert "raw secret" in result.output

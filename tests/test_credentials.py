@@ -3,8 +3,14 @@
 import json
 
 import pytest
+from click.testing import CliRunner
 
 from signoz_cli.main import _resolve_credentials
+
+
+@pytest.fixture()
+def runner():
+    return CliRunner()
 
 
 @pytest.fixture(autouse=True)
@@ -130,3 +136,75 @@ class TestEndpointNormalization:
         monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
         ep, _ = cm._resolve_credentials("https://h:443/x", "tok", None)
         assert ep == "https://h:443/x"
+
+
+class TestEndpointUserinfo:
+    def test_has_url_userinfo(self):
+        from signoz_cli.commands.common import _has_url_userinfo as has
+
+        assert has("https://bob:secret@localhost:8080") is True
+        assert has("bob:secret@localhost:8080") is True
+        assert has("https://localhost:8080") is False
+        assert has("localhost:8080") is False
+        # Bare user@host (email in a filter) is not a secret.
+        assert has("bob@localhost") is False
+        assert has("owner=bob@localhost") is False
+        assert has("--limit") is False
+        assert has("service.name = 'x'") is False
+
+    def test_redact_userinfo(self):
+        from signoz_cli.commands.common import _redact_userinfo as redact
+
+        assert redact("https://bob:secret@localhost:8080") == \
+            "https://<redacted>@localhost:8080"
+        assert redact("https://localhost:8080") == "https://localhost:8080"
+        assert redact("plain") == "plain"
+
+    def test_resolve_rejects_userinfo_endpoint(self, monkeypatch):
+        import click
+
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR",
+            __import__("pathlib").Path("/nonexistent-signoz-test"))
+        for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN", "SIGNOZ_PROFILE"):
+            monkeypatch.delenv(var, raising=False)
+        with __import__("pytest").raises(click.UsageError, match="must not embed"):
+            cm._resolve_credentials(
+                "https://bob:secret@localhost:8080", "tok", None)
+
+    def test_resolve_rejects_userinfo_from_env(self, monkeypatch):
+        import click
+
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_DIR",
+            __import__("pathlib").Path("/nonexistent-signoz-test"))
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "https://bob:secret@h:8080")
+        with __import__("pytest").raises(click.UsageError, match="must not embed"):
+            cm._resolve_credentials(None, "tok", None)
+
+    def test_history_skips_userinfo_endpoint(self, tmp_path, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(cm, "CONFIG_DIR", tmp_path)
+        cm._record_history(
+            ["logs", "search", "--endpoint",
+             "https://bob:secret@localhost:8080"])
+        assert not (tmp_path / "history.json").exists()
+
+    def test_configure_rejects_userinfo(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        result = runner.invoke(cli, [
+            "configure", "-p", "evil",
+            "--endpoint", "https://bob:secret@localhost:8080",
+            "--token", "tok"])
+        assert result.exit_code == 2
+        assert "must not embed" in result.output
