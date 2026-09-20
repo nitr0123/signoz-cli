@@ -208,3 +208,80 @@ class TestEndpointUserinfo:
             "--token", "tok"])
         assert result.exit_code == 2
         assert "must not embed" in result.output
+
+
+class TestInsecureFlagStrictness:
+    def test_is_truthy(self):
+        from signoz_cli.commands.common import _is_truthy as t
+
+        assert t(True) is True
+        assert t("true") is True
+        assert t("1") is True
+        assert t("YES") is True
+        assert t(False) is False
+        assert t("false") is False
+        assert t("0") is False
+        assert t("") is False
+        assert t(None) is False
+        assert t(0) is False
+
+    def test_string_false_profile_keeps_tls(self, monkeypatch, tmp_path):
+        import json as _json
+
+        import signoz_cli.commands.common as cm
+
+        cfg_dir = tmp_path / ".signoz"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.json").write_text(_json.dumps({
+            "default": "p",
+            "profiles": {"p": {"endpoint": "https://h:443",
+                               "token": "tok", "insecure": "false"}},
+        }))
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", cfg_dir)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", cfg_dir / "config.json")
+        for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN",
+                    "SIGNOZ_PROFILE", "SIGNOZ_TIMEOUT", "SIGNOZ_INSECURE"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(cm, "_TIMEOUT_HOLDER", {"value": None})
+        monkeypatch.setattr(cm, "_INSECURE_HOLDER", {"value": False})
+        monkeypatch.setattr(cm, "_ROOT_PROFILE", None)
+        seen = {}
+        import httpx as _httpx
+
+        real_client = _httpx.Client
+
+        def spy(*a, **k):
+            seen.update(k)
+            return real_client(*a, **k)
+
+        monkeypatch.setattr(cm.httpx, "Client", spy)
+        client = cm._get_client(None, None, None)
+        try:
+            assert seen.get("verify") is True
+        finally:
+            client.close()
+
+    def test_redirects_never_followed(self):
+        import httpx
+
+        from signoz_cli.client import SigNozClient
+
+        seen = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            if len(seen) == 1:
+                return httpx.Response(
+                    302, headers={"location": "https://evil.example/x"})
+            return httpx.Response(200, json={"version": "evil"})
+
+        client = SigNozClient(
+            "http://127.0.0.1:9", "SUPERSECRET",
+            transport=httpx.MockTransport(handler))
+        try:
+            client.get_server_version()
+        finally:
+            client.close()
+        assert len(seen) == 1
+        assert not any("evil" in u for u in seen)

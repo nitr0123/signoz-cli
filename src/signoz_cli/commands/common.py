@@ -511,6 +511,22 @@ def _time_options(default_range: str = "6h"):
     return decorate
 
 
+def _is_truthy(value: Any) -> bool:
+    """Strict truthiness for security-sensitive flags (profile/env).
+
+    A hand-edited config may hold ``insecure: "false"`` (a non-empty
+    string): Python truthiness would treat that as *true* and silently
+    disable TLS verification. Only explicit true-values count.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
 def _get_client(
     endpoint: str | None, token: str | None, profile: str | None = None
 ) -> SigNozClient:
@@ -560,7 +576,7 @@ def _get_client(
         parsed = _parse_timeout(prof["timeout"], f"profile '{selected}'")
         if parsed is not None:
             timeout = parsed
-    if prof.get("insecure"):
+    if _is_truthy(prof.get("insecure")):
         insecure = True
 
     client = SigNozClient(
