@@ -775,6 +775,19 @@ def _safe_text(v: Any) -> str:
     return s.replace("[", "\\[")
 
 
+def _safe_plain(v: Any) -> str:
+    """Strip terminal control bytes for plain (non-Rich) output paths.
+
+    ``click.echo`` writes text verbatim: Rich ``[markup]`` is inert there,
+    so brackets are preserved for readability (log bodies are full of
+    them) while ESC/BEL/C0 controls -- the bytes that actually drive
+    terminal escape sequences -- are removed. Use for stderr notices,
+    warnings, error text, and diffs carrying server-controlled content.
+    """
+    s = str(v).replace("\x1b", "").replace("\x07", "")
+    return _CONTROL_CHARS_RE.sub("", s)
+
+
 def _trunc(v: Any, max_len: int = 120) -> str:
     s = _safe_text(v)
     if len(s) > max_len:

@@ -533,3 +533,49 @@ class TestTerminalInjection:
         emit(rows, "csv")
         out = capsys.readouterr().out
         assert "PWNED" in out  # CSV keeps raw bytes for pipelines
+
+
+class TestPlainOutputSanitization:
+    EVIL = "\x1b]0;PWNED\x07\x1b[2K\rbody with [brackets] intact"
+
+    def test_safe_plain_strips_controls_keeps_brackets(self):
+        from signoz_cli.output import _safe_plain
+
+        out = _safe_plain(self.EVIL)
+        assert "\x1b" not in out
+        assert "\x07" not in out
+        assert "[brackets]" in out
+
+    def test_extract_error_neutralized(self):
+        import httpx
+
+        from signoz_cli.client import _extract_error
+
+        req = httpx.Request("GET", "http://x/api/v1/rules")
+        resp = httpx.Response(400, json={"message": self.EVIL}, request=req)
+        msg = _extract_error(resp)
+        assert "\x1b" not in msg and "\x07" not in msg
+        assert "[brackets]" in msg
+        resp2 = httpx.Response(500, text="<html>" + self.EVIL + "</html>",
+                               request=req)
+        assert "\x1b" not in _extract_error(resp2)
+
+    def test_warn_v5_neutralized(self, capsys):
+        from signoz_cli.commands.common import _warn_v5
+
+        _warn_v5({"data": {"meta": {"warning": {"warnings": [
+            {"message": self.EVIL}]}}}})
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "[brackets]" in err
+
+    def test_error_path_end_to_end(self):
+        from click.testing import CliRunner
+
+        from signoz_cli.main import cli
+
+        result = CliRunner().invoke(cli, ["alerts", "get", "no-such-rule",
+                                          "--endpoint", "http://127.0.0.1:9",
+                                          "--token", "tok-123456789"])
+        assert result.exit_code == 1
+        assert "\x1b" not in (result.output or "")
