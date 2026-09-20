@@ -182,6 +182,72 @@ def _mask_token(token: str | None) -> str:
     return "***"
 
 
+def _has_url_userinfo(text: str) -> bool:
+    """Whether *text* looks like a URL embedding credentials (user:pass@host).
+
+    Covers both full URLs (``https://bob:secret@host``) and bare
+    ``bob:secret@host:port`` forms. Used to keep secrets out of history
+    and error output.
+    """
+    if "@" not in text or " " in text:
+        return False
+    try:
+        from urllib.parse import urlsplit as _urlsplit
+
+        if "://" in text:
+            # Full URL: even a bare username is credential material
+            # (https://bob@host performs basic auth as bob).
+            parts = _urlsplit(text)
+            return bool(parts.username or parts.password)
+        # Scheme-less text: only user:PASS@host counts. A bare
+        # user@host (e.g. an email inside a PromQL/SQL filter) is not
+        # a secret and must not suppress history recording.
+        parts = _urlsplit(f"//{text}")
+        return bool(parts.password)
+    except ValueError:
+        return False
+
+
+def _redact_userinfo(text: str) -> str:
+    """Replace URL-embedded credentials with `<redacted>` for display."""
+    if "@" not in text:
+        return text
+    try:
+        from urllib.parse import urlsplit as _urlsplit
+        from urllib.parse import urlunsplit as _urlunsplit
+
+        has_scheme = "://" in text
+        parts = _urlsplit(text if has_scheme else f"//{text}")
+        if not (parts.username or parts.password):
+            return text
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc += f":{parts.port}"
+        rebuilt = _urlunsplit((
+            parts.scheme, netloc, parts.path, parts.query, parts.fragment,
+        ))
+        redacted = rebuilt.replace("//", "//<redacted>@", 1)
+        return redacted if has_scheme else redacted.lstrip("/")
+    except ValueError:
+        return text
+
+
+def _reject_endpoint_userinfo(endpoint: str | None, *, source: str) -> None:
+    """Fail fast when an endpoint URL embeds credentials.
+
+    SigNoz authenticates via the API-key header (``--token``), never via
+    URL userinfo. Credentials in the endpoint would leak into history,
+    error messages, and status displays, so refuse them with guidance
+    instead of propagating the secret.
+    """
+    if endpoint and _has_url_userinfo(endpoint):
+        raise click.UsageError(
+            f"Endpoint {source} must not embed credentials "
+            f"({_redact_userinfo(endpoint)}). Pass the API key via --token, "
+            "the SIGNOZ_ACCESS_TOKEN env var, or a stored profile instead."
+        )
+
+
 def _selected_profile_name(profile_name: str | None = None) -> str | None:
     """Resolve the effective profile name (leaf > root > env > config default)."""
     cfg = load_config()
@@ -209,6 +275,7 @@ def _resolve_credentials(
 
     resolved_endpoint = endpoint or os.getenv("SIGNOZ_ENDPOINT") or prof_endpoint
     resolved_token = token or os.getenv("SIGNOZ_ACCESS_TOKEN") or prof_token
+    _reject_endpoint_userinfo(resolved_endpoint, source="URL")
     if resolved_endpoint and "://" not in resolved_endpoint:
         # Bare "host:port" is the natural way to write a local endpoint.
         resolved_endpoint = f"http://{resolved_endpoint}"
@@ -711,6 +778,7 @@ def _record_history(args: list[str]) -> None:
     Only the read/query roots are recorded, and never --help runs.
     Invocations carrying `--token` are never recorded: persisting raw
     secrets to disk (and echoing them in `history`) would leak them.
+    The same applies to endpoint URLs embedding userinfo credentials.
     Must never break the invoked command.
     """
     try:
@@ -721,6 +789,10 @@ def _record_history(args: list[str]) -> None:
         # Never persist raw secrets: --token in either space or equals
         # form disqualifies the whole invocation from recording.
         if any(a == "--token" or a.startswith("--token=") for a in args):
+            return
+        # Endpoint URLs with embedded credentials (https://user:pass@host)
+        # are secrets too -- in any flag form.
+        if any(_has_url_userinfo(a) for a in args):
             return
         import datetime
 

@@ -307,12 +307,20 @@ class TestIndexInstallMethod:
         monkeypatch.setenv(
             "SIGNOZ_PYPI_INDEX", "https://u:t@host/api/packages/hamza/pypi/simple")
         _up2 = self._no_direct_url(monkeypatch)
-        method, argv, instructions = _up2._detect_install_method()
+        method, upgrade, instructions = _up2._detect_install_method()
         assert method == "pip"
-        assert argv is not None
+        assert upgrade is not None
+        env, argv = upgrade
         assert argv[-1] == "signoz-cli=={tag}"
-        assert "--index-url" in argv
+        # Credentials must not travel via ps-visible argv ...
+        assert "--index-url" not in argv
+        assert not any("u:t@" in c for c in argv)
+        # ... but via the environment passed to the subprocess.
+        assert env["PIP_INDEX_URL"] == \
+            "https://u:t@host/api/packages/hamza/pypi/simple"
         assert "<tag>" in instructions
+        # ... and never echoed to the terminal either.
+        assert "u:t@" not in instructions
 
     def test_index_apply_runs_pip(self, runner, monkeypatch):
         import subprocess as _sp
@@ -335,10 +343,15 @@ class TestIndexInstallMethod:
         monkeypatch.setattr(_md, "distribution", lambda name: Dist())
         monkeypatch.setattr(
             _sp, "run",
-            lambda cmd, **k: seen.update(cmd=cmd) or _Completed(0, ""))
+            lambda cmd, **k: seen.update(cmd=cmd, kwargs=k) or _Completed(0, ""))
         result = runner.invoke(cli, ["update", "--apply"])
         assert result.exit_code == 0, result.output
         assert seen["cmd"][-1] == "signoz-cli==v0.6.0"
+        # Index credentials travel via env, never via argv or terminal.
+        assert not any("u:t@" in c for c in seen["cmd"])
+        assert seen["kwargs"]["env"]["PIP_INDEX_URL"] == \
+            "https://u:t@host/api/packages/hamza/pypi/simple"
+        assert "u:t@" not in result.output
         assert "Upgraded to v0.6.0" in result.output
 
 
