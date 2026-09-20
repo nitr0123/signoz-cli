@@ -439,3 +439,46 @@ class TestPipxMetadataRobustness:
         (tmp_path / "meta.json").write_text("[1, 2]")
         assert _up._pipx_upgrade_command(
             str(tmp_path / "meta.json"), "ssh://x/y.git") is None
+
+
+class TestGitUrlCredentialRedaction:
+    def _git_direct_url(self, monkeypatch, url):
+        import importlib.metadata as _md
+        import json as _json
+
+        import signoz_cli.commands.update as _up
+
+        class Dist:
+            def read_text(self, name):
+                if name == "direct_url.json":
+                    return _json.dumps({"url": url})
+                return None
+
+        monkeypatch.setattr(_md, "distribution", lambda name: Dist())
+        monkeypatch.setattr(
+            _up.sys, "prefix", "/nonexistent-prefix-for-test")
+        return _up
+
+    def test_git_instructions_redact_credentials(self, monkeypatch):
+        _up = self._git_direct_url(
+            monkeypatch, "git+https://user:s3cret@host/x/y.git@v0.5.1")
+        method, argv, instructions = _up._detect_install_method()
+        assert method == "pip"
+        assert "s3cret" not in instructions
+        assert "<redacted>" in instructions
+        # Execution keeps working credentials; only display is redacted.
+        assert any("user:s3cret@" in c for c in argv)
+
+    def test_tag_gate_rejects_hostile_refs(self, monkeypatch):
+        import subprocess as _sp
+
+        import signoz_cli.commands.common as cm
+
+        class R:
+            returncode = 0
+            stdout = ("abc\trefs/tags/v1.2.3;evil\n"
+                      "def\trefs/tags/v0.6.0\n"
+                      "ghi\trefs/tags/v9.9.9.9.9\n")
+
+        monkeypatch.setattr(_sp, "run", lambda *a, **k: R())
+        assert cm._latest_remote_tag("ssh://x/y.git") == "v0.6.0"
