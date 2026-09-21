@@ -109,6 +109,14 @@ class _BundleFake:
         self.calls["delete"].append(("channels", channel_id))
         return {"status": "success"}
 
+    def test_channel(self, name):
+        self.calls.setdefault("test", []).append(name)
+        if name == "missing":
+            from signoz_cli.client import SigNozApiError
+
+            raise SigNozApiError(404, "not_found: no integrations found")
+        return {"status": "success"}
+
     def list_saved_views(self, source_page="logs"):
         return {"status": "success", "data": None}
 
@@ -964,3 +972,17 @@ class TestApply:
             "dashboards",
             {"name": "D", "spec": {"variables": [{"name": "v"}]}},
             {"name": "D", "spec": {"variables": []}}) is False
+class TestChannelsTest:
+    def test_fires_by_name(self, runner, fake):
+        from signoz_cli.main import cli
+
+        result = runner.invoke(cli, ["channels", "test", "ops"])
+        assert result.exit_code == 0, result.output
+        assert fake.calls["test"] == ["ops"]
+
+    def test_unknown_channel_surfaces(self, runner, fake):
+        from signoz_cli.main import cli
+
+        result = runner.invoke(cli, ["channels", "test", "missing"])
+        assert result.exit_code == 1
+        assert "404" in result.output

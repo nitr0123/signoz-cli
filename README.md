@@ -288,6 +288,7 @@ signoz metrics query e2e.requests.total --time-aggregation sum --compare 7d
 signoz logs tail --service payment-svc
 signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test
 signoz channels list                 # admin only
+signoz channels test ops             # fire a test notification by channel name
 signoz service-accounts list         # admin only
 signoz views list                    # saved views
 signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
