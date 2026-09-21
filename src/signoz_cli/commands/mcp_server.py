@@ -106,6 +106,10 @@ def _window(
     profile: str | None,
     unit: str = "ms",
 ) -> tuple[int, int]:
+    for label, val in (("start", start), ("end", end)):
+        if val is not None and (isinstance(val, bool)
+                                or not isinstance(val, (int, float))):
+            _fail(f"Invalid {label}: expected a millisecond timestamp number.")
     try:
         return resolve_timestamps(
             start, end, time_range,
