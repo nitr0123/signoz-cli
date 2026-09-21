@@ -1325,6 +1325,74 @@ def _pagination_meta(total: int, offset: int, limit: int) -> dict[str, Any]:
     }
 
 
+def _apply_anomalies(
+    rows: Any, anomalies: bool, window: int, threshold: float
+) -> tuple[Any, list[str]]:
+    """Filter time-series rows to z-score outliers for --anomalies.
+
+    Returns (rows, extra_table_keys). Validates flag values with usage
+    errors; passes data through untouched when disabled.
+    """
+    if not anomalies:
+        return rows, []
+    if window < 3:
+        raise click.UsageError("--anomaly-window must be at least 3.")
+    if threshold <= 0:
+        raise click.UsageError("--anomaly-threshold must be positive.")
+    if not isinstance(rows, list):
+        raise click.UsageError("--anomalies needs tabular time-series rows.")
+    return _detect_anomalies(rows, window, threshold), ["zscore"]
+
+
+def _detect_anomalies(
+    rows: list[dict[str, Any]], window: int = 10, threshold: float = 3.0
+) -> list[dict[str, Any]]:
+    """Flag outlier points in (series, timestamp, value) rows.
+
+    Per series in timestamp order, each point is scored against the
+    trailing ``window`` points (exclusive): ``z = (v - mean) / stdev``.
+    Points with fewer than 3 baseline samples, zero-variance baselines
+    and non-finite values are skipped. Returns the anomalous rows with
+    an added ``zscore`` key (rounded), grouped by series.
+    """
+    import math as _math
+
+    grouped: dict[str, list[tuple[Any, float, dict[str, Any]]]] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw = row.get("value")
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if not _math.isfinite(value):
+                continue
+            grouped.setdefault(str(row.get("series", "")), []).append(
+                (row.get("timestamp"), value, row))
+    out: list[dict[str, Any]] = []
+    for series in grouped:
+        points = sorted(grouped[series],
+                        key=lambda p: (p[0] is None, p[0]))
+        for i, (_, value, row) in enumerate(points):
+            baseline = [v for _, v, _ in points[max(0, i - window):i]]
+            if len(baseline) < 3:
+                continue
+            mean = sum(baseline) / len(baseline)
+            var = sum((v - mean) ** 2 for v in baseline) / len(baseline)
+            if var <= 0:
+                continue
+            z = (value - mean) / _math.sqrt(var)
+            if abs(z) >= threshold:
+                entry = dict(row)
+                entry["zscore"] = round(z, 2)
+                out.append(entry)
+    return out
+
+
 def _lint_files(
     files: tuple[str, ...],
     fmt: str,

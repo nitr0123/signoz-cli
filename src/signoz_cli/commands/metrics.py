@@ -7,6 +7,7 @@ from typing import Any
 import click
 
 from signoz_cli.commands.common import (
+    _apply_anomalies,
     _common_options,
     _extract_attribute_keys,
     _flatten_field_keys,
@@ -168,6 +169,12 @@ def _resolve_metric_temporality(
 @click.option("--compare", default=None,
               help="Compare against the window shifted back by this range "
                    "(e.g. --compare 7d adds previous/change_pct columns).")
+@click.option("--anomalies", is_flag=True,
+              help="Show only z-score outlier points.")
+@click.option("--anomaly-window", type=int, default=10, show_default=True,
+              help="Trailing points per outlier baseline.")
+@click.option("--anomaly-threshold", type=float, default=3.0, show_default=True,
+              help="Minimum |z-score| to flag.")
 @_time_options(default_range="1h")
 def metrics_query(
     endpoint: str | None,
@@ -183,6 +190,9 @@ def metrics_query(
     step: int,
     chart: bool,
     compare: str | None,
+    anomalies: bool,
+    anomaly_window: int,
+    anomaly_threshold: float,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -245,6 +255,9 @@ def metrics_query(
             rows = _join_compare(rows, _unwrap_time_series(
                 client.query_builder_v5(payload2)))
             table_keys = ["series", "timestamp", "value", "previous", "change_pct"]
+        rows, anomaly_keys = _apply_anomalies(
+            rows, anomalies, anomaly_window, anomaly_threshold)
+        table_keys = table_keys + anomaly_keys
         if _maybe_emit_chart(rows, fmt, chart):
             return
         emit(rows, fmt, table_keys=table_keys)

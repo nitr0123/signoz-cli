@@ -274,6 +274,7 @@ signoz services top-operations payment-svc --time-range 2h
 signoz metrics query app.payments.total --time-aggregation sum --time-range 1h
 signoz metrics query app.payments.total --time-aggregation sum --chart  # sparklines
 signoz metrics cardinality app.payments.total --by service.name,operation  # cost drivers
+signoz metrics query app.payments.total --time-aggregation sum --anomalies  # z-score outliers
 signoz promql 'sum({__name__="app.payments.total"})' --time-range 1h
 ```
 
