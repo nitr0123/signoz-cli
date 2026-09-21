@@ -258,26 +258,8 @@ def import_bundle(
                     existing[kind][_item_name(kind, item)] = item
         report = []
         for kind in kinds:
-            kind_dir = os.path.join(directory, kind)
-            kind_real = os.path.realpath(kind_dir)
-            for fname in sorted(os.listdir(kind_dir)):
-                if not fname.endswith(".json"):
-                    continue
-                fpath = os.path.realpath(os.path.join(kind_dir, fname))
-                # A hostile (or sloppy) bundle may contain symlinks or
-                # hardlinked names escaping the bundle directory: reading
-                # them would POST outside files to the target instance.
-                if (os.path.dirname(fpath) != kind_real
-                        or not os.path.isfile(fpath)):
-                    click.echo(
-                        f"Warning: skipping {kind}/{fname}: not a regular "
-                        "file inside the bundle directory.",
-                        err=True,
-                    )
-                    continue
-                with open(fpath, encoding="utf-8") as fh:
-                    doc = json.load(fh)
-                name = _item_name(kind, doc) if isinstance(doc, dict) else fname
+            for _fname, doc in _iter_bundle_docs(directory, kind):
+                name = _item_name(kind, doc) if isinstance(doc, dict) else _fname
                 clash = existing[kind].get(name)
                 if clash is not None:
                     if on_conflict == "skip":
@@ -385,3 +367,184 @@ def _diff_objects(old: Any, new: Any, fromfile: str, tofile: str) -> str:
     return "\n".join(difflib.unified_diff(
         old_lines, new_lines, fromfile=fromfile, tofile=tofile, lineterm="",
     ))
+
+
+def _iter_bundle_docs(directory: str, kind: str):
+    """Yield (filename, parsed doc) for a bundle kind directory.
+
+    Skips non-JSON names and entries that are not regular files inside
+    the directory (symlink escape guard): reading those would POST
+    outside files to the target instance.
+    """
+    import os as _os
+
+    kind_dir = _os.path.join(directory, kind)
+    kind_real = _os.path.realpath(kind_dir)
+    for fname in sorted(_os.listdir(kind_dir)):
+        if not fname.endswith(".json"):
+            continue
+        fpath = _os.path.realpath(_os.path.join(kind_dir, fname))
+        if (_os.path.dirname(fpath) != kind_real
+                or not _os.path.isfile(fpath)):
+            click.echo(
+                f"Warning: skipping {kind}/{fname}: not a regular "
+                "file inside the bundle directory.",
+                err=True,
+            )
+            continue
+        with open(fpath, encoding="utf-8") as fh:
+            yield fname, json.load(fh)
+
+
+def _delete_item(client, kind: str, item_id: str) -> None:
+    """Delete one item of a kind by id."""
+    if kind == "dashboards":
+        client.delete_dashboard_v2(item_id)
+    elif kind == "alerts":
+        client.delete_rule(item_id)
+    elif kind == "channels":
+        client.delete_channel(item_id)
+    elif kind == "views":
+        client.delete_saved_view(item_id)
+    else:  # pragma: no cover - guarded by kind discovery
+        raise click.UsageError(f"Unknown bundle kind '{kind}'.")
+
+
+def _is_subset(wanted: Any, current: Any) -> bool:
+    """Whether every key/value declared in *wanted* matches *current*.
+
+    Mappings recurse per key (extra server keys are ignored); lists must
+    match pairwise; scalars compare by equality. Non-container wanted
+    values compare directly.
+    """
+    if isinstance(wanted, dict):
+        return (isinstance(current, dict)
+                and all(k in current and _is_subset(v, current[k])
+                        for k, v in wanted.items()))
+    if isinstance(wanted, list):
+        return (isinstance(current, list) and len(wanted) == len(current)
+                and all(_is_subset(w, c)
+                        for w, c in zip(wanted, current, strict=True)))
+    return bool(wanted == current)
+
+
+def _docs_equal(kind: str, current: Any, wanted: Any) -> bool:
+    """Whether the live object already satisfies the bundle doc.
+
+    Subset semantics: the bundle is the source of truth for the keys it
+    declares; server-managed keys (ids, timestamps) and server defaults
+    the bundle never mentions do not count as drift. Both sides still go
+    through volatile-stripping (and dashboard spec normalization) first.
+    """
+    if not isinstance(current, dict) or not isinstance(wanted, dict):
+        return False
+    if kind == "dashboards":
+        current = _normalize_dashboard(dict(current))
+        wanted = _normalize_dashboard(dict(wanted))
+    return _is_subset(_strip_volatile(wanted), _strip_volatile(current))
+
+
+@cli.command("apply")
+@_common_options
+@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
+@click.option("--prune", is_flag=True,
+              help="Delete server items absent from the bundle (GitOps).")
+@click.option(
+    "--on-conflict", type=click.Choice(["overwrite", "skip", "fail"]),
+    default="overwrite", show_default=True,
+    help="When an item differs: overwrite it, skip it, or fail.",
+)
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def apply_bundle(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, directory: str, dry_run: bool,
+    prune: bool, on_conflict: str, yes: bool,
+) -> None:
+    """Declaratively sync a bundle directory into an instance (GitOps).
+
+    Beyond `import`: items already matching the bundle are left alone
+    (no spurious writes), and with --prune, server items missing from
+    the bundle are deleted. Everything is previewable with --dry-run.
+
+    \b
+    Examples:
+      signoz apply ./dashboards-prod -p prod --dry-run
+      signoz apply ./dashboards-prod -p prod --prune --yes
+    """
+    import os as _os
+
+    try:
+        client = _get_client(endpoint, token, profile)
+        kinds = [
+            k for k in ("channels", "views", "dashboards", "alerts")
+            if _os.path.isdir(_os.path.join(directory, k))
+        ]
+        if not kinds:
+            raise click.UsageError(
+                f"No bundle kinds found in {directory}/ "
+                "(expected subdirectories like dashboards/, alerts/)."
+            )
+        if not yes and not dry_run:
+            _confirm(
+                f"Apply bundle {directory} to {client.endpoint} "
+                f"(kinds: {', '.join(kinds)}"
+                f"{', PRUNE enabled' if prune else ''})?",
+            )
+        existing: dict[str, dict[str, dict[str, Any]]] = {}
+        for kind in kinds:
+            existing[kind] = {}
+            for item in _list_items(client, kind):
+                if isinstance(item, dict):
+                    existing[kind][_item_name(kind, item)] = item
+        wanted_names: dict[str, set[str]] = {k: set() for k in kinds}
+        report = []
+        for kind in kinds:
+            for _fname, doc in _iter_bundle_docs(directory, kind):
+                name = _item_name(kind, doc) if isinstance(doc, dict) else _fname
+                wanted_names[kind].add(name)
+                clash = existing[kind].get(name)
+                if clash is None:
+                    if dry_run:
+                        action, detail = "create", "dry-run"
+                    else:
+                        _create(client, kind, doc)
+                        action, detail = "created", ""
+                    report.append({"kind": kind, "name": name,
+                                   "action": action, "detail": detail})
+                    continue
+                current = _fetch_full(client, kind, clash)
+                if current is not None and _docs_equal(kind, current, doc):
+                    report.append({"kind": kind, "name": name,
+                                   "action": "unchanged", "detail": ""})
+                    continue
+                if on_conflict == "skip":
+                    report.append({"kind": kind, "name": name,
+                                   "action": "skipped", "detail": "differs"})
+                    continue
+                if on_conflict == "fail":
+                    raise click.UsageError(
+                        f"Conflict: {kind} '{name}' differs from bundle "
+                        "(use --on-conflict overwrite|skip).")
+                if dry_run:
+                    action, detail = "overwrite", "dry-run"
+                else:
+                    action = _overwrite(client, kind, clash, doc, dry_run)
+                    detail = "overwritten"
+                report.append({"kind": kind, "name": name, "action": action,
+                               "detail": detail})
+        if prune:
+            for kind in kinds:
+                for name, item in sorted(existing[kind].items()):
+                    if name in wanted_names[kind]:
+                        continue
+                    if dry_run:
+                        action, detail = "delete", "dry-run"
+                    else:
+                        _delete_item(client, kind, item.get("id", ""))
+                        action, detail = "deleted", ""
+                    report.append({"kind": kind, "name": name,
+                                   "action": action, "detail": detail})
+        emit(report, fmt)
+    except Exception as e:
+        _handle_error(e)

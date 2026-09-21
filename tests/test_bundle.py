@@ -64,6 +64,10 @@ class _BundleFake:
         self.calls["update"].append(("dashboards", dashboard_id, doc))
         return {"status": "success"}
 
+    def delete_dashboard_v2(self, dashboard_id):
+        self.calls["delete"].append(("dashboards", dashboard_id))
+        return {"status": "success"}
+
     def list_rules(self):
         return {"status": "success",
                 "data": {"rules": {"rules": [
@@ -79,6 +83,10 @@ class _BundleFake:
 
     def update_rule(self, rule_id, doc):
         self.calls["update"].append(("alerts", rule_id, doc))
+        return {"status": "success"}
+
+    def delete_rule(self, rule_id):
+        self.calls["delete"].append(("alerts", rule_id))
         return {"status": "success"}
 
     def list_channels(self):
@@ -860,3 +868,99 @@ class TestLint:
         result = runner.invoke(
             cli, ["dashboards", "lint", warn_only, "--strict"])
         assert result.exit_code == 1  # panels warning fails strict
+
+
+class TestApply:
+    def _doc(self, tmp_path, kind, name, doc):
+        import json as _json
+
+        d = tmp_path / "bundle" / kind
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.json").write_text(_json.dumps(doc))
+        return str(tmp_path / "bundle")
+
+    def test_dry_run_changes_nothing(self, runner, fake, tmp_path):
+        from signoz_cli.main import cli
+
+        bundle = self._doc(tmp_path, "dashboards", "new",
+                           {"name": "New", "spec": {}})
+        result = runner.invoke(cli, ["apply", bundle, "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "create" in result.output
+        assert fake.calls["create"] == [] and fake.calls["update"] == []
+
+    def test_unchanged_skips_write(self, runner, fake, tmp_path):
+        from signoz_cli.main import cli
+
+        fake.dashboards = [{"id": "d1", "name": "Dash"}]
+        bundle = self._doc(tmp_path, "dashboards", "d",
+                           {"id": "d1", "name": "Dash"})
+        result = runner.invoke(cli, ["apply", bundle, "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "unchanged" in result.output
+        assert fake.calls["create"] == [] and fake.calls["update"] == []
+
+    def test_prune_deletes_missing(self, runner, fake, tmp_path):
+        from signoz_cli.main import cli
+
+        # Fake lists Dash0..2; get_* returns name "Dash", so the bundle
+        # entry Dash0 clashes-but-differs while Dash1/2 are prune targets.
+        bundle = self._doc(tmp_path, "dashboards", "keep",
+                           {"name": "Dash0", "spec": {}})
+        result = runner.invoke(
+            cli, ["apply", bundle, "--prune", "--yes", "--on-conflict",
+                  "skip"])
+        assert result.exit_code == 0, result.output
+        assert "deleted" in result.output
+        assert fake.calls["update"] == []
+        assert ("dashboards", "d1") in fake.calls["delete"]
+        assert ("dashboards", "d2") in fake.calls["delete"]
+
+    def test_prune_dry_run_safe(self, runner, fake, tmp_path):
+        from signoz_cli.main import cli
+
+        bundle = self._doc(tmp_path, "dashboards", "keep",
+                           {"name": "Dash0", "spec": {}})
+        result = runner.invoke(cli, ["apply", bundle, "--prune",
+                                     "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "delete" in result.output
+
+    def test_conflict_fail_and_no_input(self, runner, fake, tmp_path):
+        from signoz_cli.main import cli
+
+        bundle = self._doc(tmp_path, "dashboards", "x",
+                           {"name": "Dash0", "spec": {}})
+        result = runner.invoke(
+            cli, ["apply", bundle, "--yes", "--on-conflict", "fail"])
+        assert result.exit_code == 2
+        result = runner.invoke(cli, ["apply", bundle, "--no-input"])
+        assert result.exit_code == 2
+        assert "--yes" in result.output
+
+    def test_docs_equal_ignores_volatile(self):
+        from signoz_cli.commands.bundle import _docs_equal
+
+        assert _docs_equal(
+            "alerts",
+            {"id": "r1", "alert": "R", "createdAt": "t"},
+            {"alert": "R"}) is True
+        assert _docs_equal(
+            "alerts", {"alert": "R"}, {"alert": "Other"}) is False
+        assert _docs_equal("alerts", [], {"alert": "R"}) is False
+
+    def test_docs_equal_subset_semantics(self):
+        from signoz_cli.commands.bundle import _docs_equal
+
+        # Server defaults/additions the bundle never declares are not drift.
+        assert _docs_equal(
+            "dashboards",
+            {"name": "D", "locked": False, "tags": [],
+             "spec": {"variables": [], "panels": {},
+                      "display": {"name": "D"}}},
+            {"name": "D", "spec": {"variables": []}}) is True
+        # ...but drift in a declared key is.
+        assert _docs_equal(
+            "dashboards",
+            {"name": "D", "spec": {"variables": [{"name": "v"}]}},
+            {"name": "D", "spec": {"variables": []}}) is False
