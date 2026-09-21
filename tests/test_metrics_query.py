@@ -293,3 +293,27 @@ class TestAnomalies:
         monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
         monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
         monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {
+                    "type": "time_series",
+                    "data": {"results": [{"aggregations": [{"series": [{
+                        "labels": [],
+                        "values": [{"timestamp": i,
+                                    "value": 10.0 + (i % 3) * 0.5}
+                                   for i in range(10)]
+                        + [{"timestamp": 10, "value": 100.0}]}]}]}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(
+            cli, ["metrics", "query", "m", "--time-aggregation", "sum",
+                  "--anomalies"])
+        assert result.exit_code == 0, result.output
+        assert "zscore" in result.output
