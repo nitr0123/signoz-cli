@@ -1185,3 +1185,89 @@ class TestHistorySecretRedaction:
         result = runner.invoke(cli, ["rerun", "0"])
         assert result.exit_code == 2
         assert "raw secret" in result.output
+
+
+class TestWatch:
+    def test_interval_validation(self, runner):
+        from signoz_cli.main import cli
+
+        result = runner.invoke(cli, ["watch", "-n", "0", "--", "alerts", "list"])
+        assert result.exit_code == 2
+        assert "positive" in result.output
+
+    def test_self_wrap_refused(self, runner):
+        from signoz_cli.main import cli
+
+        for bad in ["watch", "mcp", "completion", "update"]:
+            result = runner.invoke(cli, ["watch", "--", bad])
+            assert result.exit_code == 2, bad
+            assert "refusing" in result.output
+
+    def test_reruns_until_interrupt(self, runner, monkeypatch):
+        import subprocess as _sp
+
+        from signoz_cli.main import cli
+
+        seen = []
+
+        class _Proc:
+            returncode = 0
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            if len(seen) >= 3:
+                raise KeyboardInterrupt()
+            return _Proc()
+
+        sleeps = []
+        monkeypatch.setattr(_sp, "run", fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+        result = runner.invoke(
+            cli, ["watch", "-n", "5", "--", "alerts", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        assert len(seen) == 3
+        # list-form re-exec, no shell, full args preserved
+        assert seen[0][1:] == ["alerts", "list", "--json"]
+        assert "shell" not in str(seen[0]).lower()
+        assert sleeps == [5, 5]
+        assert "Stopped." in result.output
+
+    def test_nonzero_exit_reported_and_continues(self, runner, monkeypatch):
+        import subprocess as _sp
+
+        from signoz_cli.main import cli
+
+        calls = []
+
+        class _Proc:
+            returncode = 1
+
+        def fake_run(argv, **kwargs):
+            calls.append(1)
+            if len(calls) >= 2:
+                raise KeyboardInterrupt()
+            return _Proc()
+
+        monkeypatch.setattr(_sp, "run", fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        result = runner.invoke(cli, ["watch", "--", "alerts", "list"])
+        assert result.exit_code == 0, result.output
+        assert "last exit: 1" in result.output
+
+    def test_header_redacts_secrets(self, runner, monkeypatch):
+        import subprocess as _sp
+
+        from signoz_cli.main import cli
+
+        class _Proc:
+            returncode = 0
+
+        monkeypatch.setattr(_sp, "run", lambda argv, **k: _Proc())
+        monkeypatch.setattr("time.sleep", lambda s: (_ for _ in ()).throw(KeyboardInterrupt()))
+        result = runner.invoke(cli, [
+            "watch", "--", "alerts", "list", "--token", "SECRET123",
+            "--endpoint", "https://bob:pw@h:8080"])
+        assert result.exit_code == 0, result.output
+        assert "SECRET123" not in result.output
+        assert "bob:pw@" not in result.output
+        assert "<redacted>" in result.output

@@ -1325,6 +1325,30 @@ def _pagination_meta(total: int, offset: int, limit: int) -> dict[str, Any]:
     }
 
 
+def _maybe_emit_chart(rows: Any, fmt: str, chart: bool) -> bool:
+    """Render time-series rows as an ASCII chart for --chart.
+
+    Returns True when the output was handled. Raises UsageError when
+    --chart is combined with machine formats or the rows are not
+    plottable (series/timestamp/numeric-value).
+    """
+    if not chart:
+        return False
+    if fmt != "table":
+        raise click.UsageError(
+            "--chart cannot be combined with -f/--json/--csv/-o formats."
+        )
+    if not isinstance(rows, list):
+        raise click.UsageError("--chart needs tabular time-series rows.")
+    from signoz_cli.output import emit_chart
+
+    try:
+        emit_chart(rows)
+    except ValueError as ex:
+        raise click.UsageError(str(ex)) from None
+    return True
+
+
 def _add_skeleton_option(cmd: click.Command) -> click.Command:
     """Add --generate-cli-skeleton to a command."""
     cmd.params.append(

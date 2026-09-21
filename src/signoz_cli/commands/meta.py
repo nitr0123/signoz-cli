@@ -409,3 +409,68 @@ def rerun_cmd(index: int) -> None:
             ) from None
     except Exception as e:
         _handle_error(e)
+
+
+@cli.command("watch")
+@click.option("-n", "--interval", type=float, default=2.0, show_default=True,
+              help="Seconds between runs.")
+@click.argument("command", nargs=-1, required=True)
+def watch_cmd(interval: float, command: tuple[str, ...]) -> None:
+    """Re-run a signoz command every N seconds, like watch(1).
+
+    The wrapped command re-executes in a child process (list-form, no
+    shell), so each run starts clean. Relative --time-range windows
+    re-anchor every run. Ctrl-C stops.
+
+    \b
+    Examples:
+      signoz watch -n 5 -- alerts list
+      signoz watch -- metrics top --time-range 1h
+    """
+    if interval <= 0:
+        raise click.UsageError("--interval must be positive (seconds).")
+    root = command[0] if command else ""
+    if root in ("watch", "mcp", "completion", "update"):
+        raise click.UsageError(
+            f"watch: refusing to wrap '{root}' "
+            "(interactive, long-lived, or self-modifying)."
+        )
+    import subprocess as _sp
+    import sys as _sys
+    import time as _time
+
+    argv0 = _sys.argv[0]
+    last_exit: int | None = None
+    # Never echo raw secrets into the repeating header: mask --token
+    # values (both forms), mirroring the history display redaction.
+    shown: list[str] = []
+    _skip_next = False
+    for _arg in command:
+        if _skip_next:
+            shown.append("<redacted>")
+            _skip_next = False
+        elif _arg == "--token":
+            shown.append(_arg)
+            _skip_next = True
+        elif _arg.startswith("--token="):
+            shown.append("--token=<redacted>")
+        elif _has_url_userinfo(_arg):
+            shown.append(_redact_userinfo(_arg))
+        else:
+            shown.append(_arg)
+    try:
+        while True:
+            stamp = _time.strftime("%Y-%m-%d %H:%M:%S")
+            header = f"Every {interval:g}s: signoz {' '.join(shown)}  [{stamp}]"
+            if last_exit not in (None, 0):
+                header += f"  (last exit: {last_exit})"
+            if _sys.stdout.isatty():
+                click.clear()
+            click.echo(header, err=True)
+            proc = _sp.run([argv0, *command])
+            last_exit = proc.returncode
+            _time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("Stopped.", err=True)
+    except Exception as e:
+        _handle_error(e)

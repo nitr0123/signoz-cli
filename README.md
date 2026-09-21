@@ -268,7 +268,7 @@ signoz services top-operations payment-svc --time-range 2h
 
 ```shell
 signoz metrics query app.payments.total --time-aggregation sum --time-range 1h
-signoz metrics query system.cpu.time --group-by "host.name"
+signoz metrics query app.payments.total --time-aggregation sum --chart  # sparklines
 signoz promql 'sum({__name__="app.payments.total"})' --time-range 1h
 ```
 
@@ -283,6 +283,7 @@ signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/
 signoz channels list                 # admin only
 signoz service-accounts list         # admin only
 signoz views list                    # saved views
+signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
 signoz logs search --all             # auto-paginate everything
 signoz logs search -f csv -o out.csv # CSV to file
 signoz --timeout 30 --insecure auth verify   # TLS/proxy options; retries on 429/5xx are automatic
