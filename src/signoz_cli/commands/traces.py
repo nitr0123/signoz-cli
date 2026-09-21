@@ -370,6 +370,48 @@ def traces_detail(
 
 
 
+@traces.command("waterfall")
+@_common_options
+@click.argument("trace_id")
+@_time_options(default_range="6h")
+def traces_waterfall(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    trace_id: str,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Render one trace as an ASCII timeline waterfall.
+
+    Bars are positioned and scaled against the whole-trace window;
+    error spans carry a '!' flag. For the raw payload use
+    'traces detail -f json'.
+    """
+    if fmt != "table":
+        raise click.UsageError(
+            "waterfall is a visual command; use 'traces detail -f json' "
+            "for machine-readable span data."
+        )
+    try:
+        from signoz_cli.output import render_waterfall
+
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h", profile_time_range=_profile_time_range(profile))
+        data = client.get_trace_detail(trace_id, s, e)
+        spans = (data.get("data") or {}).get("spans") or []
+        try:
+            click.echo(render_waterfall(spans), nl=False)
+        except ValueError as ex:
+            raise click.UsageError(str(ex)) from None
+    except Exception as ex:
+        _handle_error(ex)
+
+
+
+
 @traces.command("tail")
 @_common_options
 @click.option("--service", default=None, help="Service name filter.")

@@ -342,7 +342,6 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# YAML output (PyYAML)
 # ASCII charts (sparklines for time series)
 # ---------------------------------------------------------------------------
 
@@ -431,6 +430,66 @@ def render_chart(rows: list[dict[str, Any]], width: int | None = None) -> str:
 def emit_chart(rows: list[dict[str, Any]]) -> None:
     """Write chart rendering through the standard output routing."""
     _write(render_chart(rows))
+
+
+# ---------------------------------------------------------------------------
+# Trace waterfall
+# ---------------------------------------------------------------------------
+
+def render_waterfall(spans: list[dict[str, Any]], width: int | None = None) -> str:
+    """Render spans as an ASCII timeline waterfall.
+
+    Each line: indented ``service name``, a bar positioned/scaled against
+    the whole-trace window, duration and an error flag. Span times come
+    from ``time_unix`` (milliseconds) and ``duration_nano``. Raises
+    ``ValueError`` when no usable spans are present.
+    """
+    import shutil as _shutil
+
+    norm: list[dict[str, Any]] = []
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        raw_start = span.get("time_unix")
+        raw_dur = span.get("duration_nano") or 0
+        if raw_start is None:
+            continue
+        try:
+            start_ms = float(raw_start)
+            dur_ms = float(raw_dur) / 1e6
+        except (TypeError, ValueError):
+            continue
+        res = span.get("resource") or {}
+        service = res.get("service.name", "") if isinstance(res, dict) else ""
+        try:
+            depth = max(0, int(span.get("level") or 0))
+        except (TypeError, ValueError):
+            depth = 0
+        norm.append({
+            "start": start_ms, "dur": dur_ms, "depth": depth,
+            "label": f"{'  ' * min(depth, 8)}{service} {span.get('name', '')}".strip(),
+            "error": bool(span.get("has_error")),
+        })
+    if not norm:
+        raise ValueError("No spans with timing data to render.")
+    t0 = min(s["start"] for s in norm)
+    t1 = max(s["start"] + s["dur"] for s in norm)
+    total = max(t1 - t0, 1e-9)
+    term_width = width or _shutil.get_terminal_size((80, 24)).columns
+    label_width = min(40, max(len(s["label"]) for s in norm) + 2)
+    bar_width = max(10, term_width - label_width - 22)
+    lines = []
+    for s in sorted(norm, key=lambda x: (x["start"], x["depth"])):
+        offset = min(int((s["start"] - t0) / total * bar_width), bar_width)
+        length = max(1, min(int(s["dur"] / total * bar_width), bar_width - offset))
+        bar = " " * offset + "█" * length
+        flag = " !" if s["error"] else ""
+        lines.append(
+            f"{_safe_plain(s['label'])[:label_width - 1]:<{label_width}}"
+            f"│{bar:<{bar_width}} {s['dur']:.2f}ms{flag}"
+        )
+    lines.append(f"trace window: {total:.2f}ms across {len(norm)} span(s)")
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------

@@ -278,6 +278,8 @@ OTel metrics keep dotted names, so PromQL queries need brace selectors.
 
 ```shell
 signoz traces detail TRACE_ID        # spans with attributes/events
+signoz traces waterfall TRACE_ID     # ASCII timeline (raw: detail -f json)
+signoz metrics query e2e.requests.total --time-aggregation sum --compare 7d
 signoz logs tail --service payment-svc
 signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test
 signoz channels list                 # admin only

@@ -679,3 +679,124 @@ class TestChartNonFinite:
         with pytest.raises(ValueError, match="plottable"):
             render_chart([{"series": "a", "timestamp": 1,
                            "value": float("inf")}])
+class TestWaterfall:
+    def _spans(self):
+        return [
+            {"span_id": "r", "parent_span_id": "", "name": "root",
+             "time_unix": 1000, "duration_nano": 50_000_000,
+             "level": 0, "has_error": False,
+             "resource": {"service.name": "web"}},
+            {"span_id": "c", "parent_span_id": "r", "name": "db\x1b[2K",
+             "time_unix": 1010, "duration_nano": 20_000_000,
+             "level": 1, "has_error": True,
+             "resource": {"service.name": "db"}},
+            {"span_id": "x", "name": "nodata"},
+        ]
+
+    def test_renders_bars_and_flags(self):
+        from signoz_cli.output import render_waterfall
+
+        out = render_waterfall(self._spans(), width=70)
+        assert "web root" in out
+        assert "█" in out
+        assert "!" in out
+        assert "\x1b" not in out
+        assert "2 span(s)" in out
+
+    def test_rejects_empty(self):
+        import pytest
+
+        from signoz_cli.output import render_waterfall
+
+        with pytest.raises(ValueError, match="No spans"):
+            render_waterfall([{"name": "nodata"}])
+        with pytest.raises(ValueError, match="No spans"):
+            render_waterfall([])
+
+    def test_waterfall_command(self, monkeypatch):
+        from click.testing import CliRunner
+
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        spans = self._spans()
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_trace_detail(self, trace_id, s, e):
+                assert trace_id == "abc123"
+                return {"data": {"spans": spans}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = CliRunner().invoke(cli, ["traces", "waterfall", "abc123"])
+        assert result.exit_code == 0, result.output
+        assert "█" in result.output
+        bad = CliRunner().invoke(
+            cli, ["traces", "waterfall", "abc123", "--json"])
+        assert bad.exit_code == 2
+
+
+class TestCompare:
+    def test_join_aligns_and_pcts(self):
+        from signoz_cli.commands.common import _join_compare
+
+        cur = [
+            {"series": "a", "timestamp": 2, "value": 150.0},
+            {"series": "a", "timestamp": 1, "value": 100.0},
+            {"series": "b", "timestamp": 1, "value": 10.0},
+        ]
+        prev = [
+            {"series": "a", "timestamp": 1, "value": 100.0},
+            {"series": "a", "timestamp": 2, "value": 100.0},
+        ]
+        out = _join_compare(cur, prev)
+        assert out[0]["previous"] == 100.0
+        assert out[0]["change_pct"] == 50.0
+        assert out[1]["previous"] == 100.0
+        assert out[1]["change_pct"] == 0.0
+        assert out[2]["previous"] is None
+        assert out[2]["change_pct"] is None
+
+    def test_join_zero_previous(self):
+        from signoz_cli.commands.common import _join_compare
+
+        out = _join_compare(
+            [{"series": "a", "timestamp": 1, "value": 5.0}],
+            [{"series": "a", "timestamp": 1, "value": 0.0}])
+        assert out[0]["previous"] == 0.0
+        assert out[0]["change_pct"] is None
+
+    def test_compare_flag_validation(self, monkeypatch):
+        from click.testing import CliRunner
+
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success",
+                        "data": {"type": "scalar", "data": {"results": []}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = CliRunner().invoke(
+            cli, ["metrics", "query", "m", "--compare", "bogus"])
+        assert result.exit_code == 2
+        assert "Invalid --compare" in result.output
