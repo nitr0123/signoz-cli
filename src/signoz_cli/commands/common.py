@@ -1349,6 +1349,65 @@ def _maybe_emit_chart(rows: Any, fmt: str, chart: bool) -> bool:
     return True
 
 
+def _join_compare(
+    current: list[dict[str, Any]], previous: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Join current and previous-window series rows for --compare output.
+
+    Rows align per series by timestamp order (both windows share step and
+    width, so positions correspond); overhang is truncated. Each row gains
+    ``previous`` and ``change_pct`` keys (None when undefined).
+    """
+    def _series_values(rows: Any) -> dict[str, list[tuple[Any, float]]]:
+        grouped: dict[str, list[tuple[Any, float]]] = {}
+        if not isinstance(rows, list):
+            return grouped
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_value = row.get("value")
+            if raw_value is None:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            grouped.setdefault(str(row.get("series", "")), []).append(
+                (row.get("timestamp"), value))
+        return {k: sorted(v, key=lambda p: (p[0] is None, p[0]))
+                for k, v in grouped.items()}
+
+    prev = _series_values(previous)
+    out: list[dict[str, Any]] = []
+    if not isinstance(current, list):
+        return out
+    seen: dict[str, int] = {}
+    for row in current:
+        if not isinstance(row, dict):
+            continue
+        series = str(row.get("series", ""))
+        idx = seen.get(series, 0)
+        seen[series] = idx + 1
+        old = prev.get(series, [])
+        entry = dict(row)
+        raw_cur = entry.get("value")
+        try:
+            cur = float(raw_cur) if raw_cur is not None else None
+        except (TypeError, ValueError):
+            cur = None
+        if cur is not None and idx < len(old):
+            entry["previous"] = old[idx][1]
+            entry["change_pct"] = (
+                round((cur - old[idx][1]) / abs(old[idx][1]) * 100, 2)
+                if old[idx][1] else None
+            )
+        else:
+            entry["previous"] = None
+            entry["change_pct"] = None
+        out.append(entry)
+    return out
+
+
 def _add_skeleton_option(cmd: click.Command) -> click.Command:
     """Add --generate-cli-skeleton to a command."""
     cmd.params.append(

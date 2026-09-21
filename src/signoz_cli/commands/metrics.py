@@ -13,6 +13,7 @@ from signoz_cli.commands.common import (
     _flatten_field_values,
     _get_client,
     _handle_error,
+    _join_compare,
     _maybe_emit_chart,
     _pagination_meta,
     _profile_time_range,
@@ -164,6 +165,9 @@ def _resolve_metric_temporality(
               help="Step interval in seconds.")
 @click.option("--chart", is_flag=True,
               help="Render time series as ASCII sparklines.")
+@click.option("--compare", default=None,
+              help="Compare against the window shifted back by this range "
+                   "(e.g. --compare 7d adds previous/change_pct columns).")
 @_time_options(default_range="1h")
 def metrics_query(
     endpoint: str | None,
@@ -178,6 +182,7 @@ def metrics_query(
     filter_expr: str,
     step: int,
     chart: bool,
+    compare: str | None,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -217,10 +222,32 @@ def metrics_query(
         rows = _unwrap_time_series(resp)
         if not rows:
             _warn_empty_metrics(metric_name)
+        table_keys = ["series", "timestamp", "value"]
+        if compare:
+            from signoz_cli.timeutil import parse_time_range
+
+            try:
+                delta = parse_time_range(compare)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid --compare '{compare}'. "
+                    "Use formats like '24h', '7d'."
+                ) from None
+            payload2 = build_metrics_query_payload(
+                s - delta, e - delta, metric_name,
+                temporality=temporality,
+                time_aggregation=time_aggregation,
+                space_aggregation=space_aggregation,
+                group_by=group_by_fields,
+                filter_expression=filter_expr,
+                step_interval=step,
+            )
+            rows = _join_compare(rows, _unwrap_time_series(
+                client.query_builder_v5(payload2)))
+            table_keys = ["series", "timestamp", "value", "previous", "change_pct"]
         if _maybe_emit_chart(rows, fmt, chart):
             return
-        emit(rows, fmt,
-             table_keys=["series", "timestamp", "value"])
+        emit(rows, fmt, table_keys=table_keys)
     except Exception as ex:
         _handle_error(ex)
 

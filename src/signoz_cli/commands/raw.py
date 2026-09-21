@@ -8,6 +8,7 @@ from signoz_cli.commands.common import (
     _common_options,
     _get_client,
     _handle_error,
+    _join_compare,
     _maybe_emit_chart,
     _profile_time_range,
     _read_json,
@@ -44,6 +45,9 @@ def query_raw(endpoint: str | None, token: str | None, fmt: str,
 @click.option("--step", type=int, default=60, show_default=True, help="Step seconds.")
 @click.option("--chart", is_flag=True,
               help="Render time series as ASCII sparklines.")
+@click.option("--compare", default=None,
+              help="Compare against the window shifted back by this range "
+                   "(e.g. --compare 7d adds previous/change_pct columns).")
 @_time_options(default_range="1h")
 def promql_query(
     endpoint: str | None,
@@ -53,6 +57,7 @@ def promql_query(
     query: str,
     step: int,
     chart: bool,
+    compare: str | None,
     time_range: str | None,
     start: int | None,
     end: int | None,
@@ -71,9 +76,23 @@ def promql_query(
         resp = client.query_promql(query, s, e, step=step)
         _warn_v5(resp)
         rows = _unwrap_time_series(resp)
+        table_keys = ["series", "timestamp", "value"]
+        if compare:
+            from signoz_cli.timeutil import parse_time_range
+
+            try:
+                delta = parse_time_range(compare)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid --compare '{compare}'. "
+                    "Use formats like '24h', '7d'."
+                ) from None
+            rows = _join_compare(rows, _unwrap_time_series(
+                client.query_promql(query, s - delta, e - delta, step=step)))
+            table_keys = ["series", "timestamp", "value", "previous", "change_pct"]
         if _maybe_emit_chart(rows, fmt, chart):
             return
-        emit(rows, fmt, table_keys=["series", "timestamp", "value"])
+        emit(rows, fmt, table_keys=table_keys)
     except Exception as ex:
         _handle_error(ex)
 
