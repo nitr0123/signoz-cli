@@ -95,3 +95,21 @@ def channels_delete(endpoint: str | None, token: str | None, fmt: str,
         _handle_error(e)
 
 
+
+
+@channels.command("test")
+@_common_options
+@click.argument("name")
+def channels_test(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None, name: str) -> None:
+    """Fire a test notification through a channel (by name).
+
+    The server resolves the receiver by name and reports the delivery
+    outcome (unknown names fail cleanly). Needs a key allowed to use
+    notification channels.
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.test_channel(name), fmt)
+    except Exception as e:
+        _handle_error(e)

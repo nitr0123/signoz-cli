@@ -390,6 +390,11 @@ class SigNozClient:
     def create_channel(self, channel: dict[str, Any]) -> Any:
         return self._post("/api/v1/channels", json_body=channel, idempotent=False)
 
+    def test_channel(self, name: str) -> Any:
+        """Fire a test notification through the named channel (by name)."""
+        return self._post("/api/v1/channels/test", json_body={"name": name},
+                          idempotent=False)
+
     def update_channel(self, channel_id: str, channel: dict[str, Any]) -> Any:
         return self._put(f"/api/v1/channels/{channel_id}", json_body=channel)
 
