@@ -262,3 +262,84 @@ class TestDoctor:
         assert result.exception is None or isinstance(
             result.exception, SystemExit)
         assert "Traceback" not in (result.output or "")
+
+
+class TestSavedQueries:
+    def _iso(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr("signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_FILE",
+            tmp_path / "config.json")
+        monkeypatch.setattr(
+            "signoz_cli.commands.saved.CONFIG_DIR", tmp_path)
+        for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN",
+                    "SIGNOZ_PROFILE"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_save_run_delete_cycle(self, runner, monkeypatch, tmp_path):
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_promql(self, *a, **k):
+                return {"data": {"data": {"results": []}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        assert runner.invoke(
+            cli, ["saved", "save", "q1", "--kind", "promql",
+                  "--query", "up"]).exit_code == 0
+        result = runner.invoke(cli, ["saved", "list"])
+        assert result.exit_code == 0 and "q1" in result.output
+        result = runner.invoke(cli, ["saved", "show", "q1"])
+        assert result.exit_code == 0 and "promql" in result.output
+        result = runner.invoke(cli, ["saved", "run", "q1"])
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(cli, ["saved", "delete", "q1", "--yes"])
+        assert result.exit_code == 0
+        result = runner.invoke(cli, ["saved", "list", "--json"])
+        assert '"q1"' not in result.output
+
+    def test_validation(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        assert runner.invoke(
+            cli, ["saved", "save", "bad name!", "--kind", "promql",
+                  "--query", "up"]).exit_code == 2
+        assert runner.invoke(
+            cli, ["saved", "save", "q", "--kind", "builder",
+                  "--query", "not json"]).exit_code == 2
+        assert runner.invoke(cli, ["saved", "run", "nope"]).exit_code == 2
+        assert runner.invoke(cli, ["saved", "show", "nope"]).exit_code == 2
+
+    def test_overwrite_guard_and_perms(self, runner, monkeypatch, tmp_path):
+        import stat as _stat
+
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        assert runner.invoke(
+            cli, ["saved", "save", "q", "--kind", "sql",
+                  "--query", "SELECT 1"]).exit_code == 0
+        result = runner.invoke(
+            cli, ["saved", "save", "q", "--kind", "sql",
+                  "--query", "SELECT 2"])
+        assert result.exit_code == 2
+        assert runner.invoke(
+            cli, ["saved", "save", "q", "--kind", "sql",
+                  "--query", "SELECT 2", "--yes"]).exit_code == 0
+        mode = _stat.S_IMODE((tmp_path / "queries.json").stat().st_mode)
+        assert mode == 0o600

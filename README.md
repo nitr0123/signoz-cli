@@ -305,6 +305,8 @@ eval "$(_SIGNOZ_COMPLETE=bash_source signoz)"  # bash completion (zsh/fish varia
 
 ```shell
 signoz query my-query.json
+signoz saved save errors-1h --kind promql --query 'sum({__name__="app.errors.total"})'
+signoz saved run errors-1h --time-range 24h
 ```
 
 See the [Query Builder v5 docs](https://signoz.io/docs/userguide/query-builder-v5/) for the JSON schema.
