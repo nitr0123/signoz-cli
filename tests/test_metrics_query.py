@@ -244,3 +244,76 @@ class TestCardinality:
                      ["metrics", "cardinality", "m", "--by", "  "]]:
             result = runner.invoke(cli, args)
             assert result.exit_code == 2, args
+
+
+class TestAnomalies:
+    def _rows(self):
+        steady = [{"series": "a", "timestamp": i, "value": 10.0 + (i % 3) * 0.5}
+                  for i in range(10)]
+        steady.append({"series": "a", "timestamp": 10, "value": 100.0})
+        return steady
+
+    def test_spike_detected(self):
+        from signoz_cli.commands.common import _detect_anomalies
+
+        out = _detect_anomalies(self._rows())
+        assert len(out) == 1
+        assert out[0]["timestamp"] == 10
+        assert out[0]["zscore"] > 3.0
+
+    def test_flat_series_clean(self):
+        from signoz_cli.commands.common import _detect_anomalies
+
+        rows = [{"series": "a", "timestamp": i, "value": 5.0}
+                for i in range(12)]
+        assert _detect_anomalies(rows) == []
+
+    def test_threshold_tunable(self):
+        from signoz_cli.commands.common import _detect_anomalies
+
+        assert _detect_anomalies(self._rows(), threshold=1000.0) == []
+        flagged = _detect_anomalies(self._rows(), threshold=2.0)
+        assert len(flagged) == 1
+        assert flagged[0]["timestamp"] == 10
+
+    def test_flag_validation(self, runner):
+        from signoz_cli.main import cli
+
+        for args in [["metrics", "query", "m", "--anomalies",
+                      "--anomaly-window", "2"],
+                     ["metrics", "query", "m", "--anomalies",
+                      "--anomaly-threshold", "0"]]:
+            result = runner.invoke(cli, args)
+            assert result.exit_code == 2, args
+
+    def test_flag_end_to_end(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
+        from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {
+                    "type": "time_series",
+                    "data": {"results": [{"aggregations": [{"series": [{
+                        "labels": [],
+                        "values": [{"timestamp": i,
+                                    "value": 10.0 + (i % 3) * 0.5}
+                                   for i in range(10)]
+                        + [{"timestamp": 10, "value": 100.0}]}]}]}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(
+            cli, ["metrics", "query", "m", "--time-aggregation", "sum",
+                  "--anomalies"])
+        assert result.exit_code == 0, result.output
+        assert "zscore" in result.output
