@@ -191,3 +191,40 @@ class TestStdioProtocol:
         finally:
             proc.kill()
             proc.wait(timeout=10)
+
+
+class TestErrorMapping:
+    def test_missing_auth_is_tool_error_not_crash(self, monkeypatch, tmp_path):
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        import signoz_cli.commands.common as cm
+        import signoz_cli.config as _cfg
+
+        monkeypatch.setattr(_cfg, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(_cfg, "CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(cm, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(cm, "CONFIG_FILE", tmp_path / "config.json")
+        for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN", "SIGNOZ_PROFILE"):
+            monkeypatch.delenv(var, raising=False)
+        with pytest.raises(ToolError, match="Missing endpoint"):
+            mcp_server.logs_search(service="svc")
+
+    def test_bad_profile_time_range_is_tool_error(self, monkeypatch, tmp_path):
+        import json as _json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        import signoz_cli.commands.common as cm
+        import signoz_cli.config as _cfg
+
+        monkeypatch.setattr(_cfg, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(_cfg, "CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(cm, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(cm, "CONFIG_FILE", tmp_path / "config.json")
+        (tmp_path / "config.json").write_text(_json.dumps({
+            "default": "p",
+            "profiles": {"p": {"endpoint": "http://h:8080", "token": "t",
+                               "default_time_range": "bogus"}}}))
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        with pytest.raises(ToolError, match="Invalid"):
+            mcp_server.logs_search(profile="p")

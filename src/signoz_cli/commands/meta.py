@@ -422,6 +422,10 @@ def watch_cmd(interval: float, command: tuple[str, ...]) -> None:
     shell), so each run starts clean. Relative --time-range windows
     re-anchor every run. Ctrl-C stops.
 
+    Note: arguments are passed to the child verbatim and stay visible
+    in process listings while it runs -- prefer profiles/env vars over
+    --token/--endpoint secrets here, as everywhere else.
+
     \b
     Examples:
       signoz watch -n 5 -- alerts list
@@ -430,10 +434,14 @@ def watch_cmd(interval: float, command: tuple[str, ...]) -> None:
     if interval <= 0:
         raise click.UsageError("--interval must be positive (seconds).")
     root = command[0] if command else ""
-    if root in ("watch", "mcp", "completion", "update"):
+    if root in (
+        "watch", "mcp", "completion", "update",
+        "configure", "profile", "history", "rerun",
+    ):
         raise click.UsageError(
             f"watch: refusing to wrap '{root}' "
-            "(interactive, long-lived, or self-modifying)."
+            "(interactive, long-lived, credential/state-touching, "
+            "or self-modifying)."
         )
     import subprocess as _sp
     import sys as _sys

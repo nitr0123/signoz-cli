@@ -400,6 +400,12 @@ def render_chart(rows: list[dict[str, Any]], width: int | None = None) -> str:
             value = float(raw_value)
         except (TypeError, ValueError):
             continue
+        import math as _math
+
+        if not _math.isfinite(value):
+            # inf/nan would poison scaling (NaN pidgins int()) and carry
+            # no chart information; skip the point instead of crashing.
+            continue
         grouped.setdefault(str(series), []).append((row.get("timestamp"), value))
     if not grouped:
         raise ValueError(

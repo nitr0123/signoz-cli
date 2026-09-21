@@ -1271,3 +1271,11 @@ class TestWatch:
         assert "SECRET123" not in result.output
         assert "bob:pw@" not in result.output
         assert "<redacted>" in result.output
+
+    def test_state_touching_roots_refused(self, runner):
+        from signoz_cli.main import cli
+
+        for bad in ["configure", "profile", "history", "rerun"]:
+            result = runner.invoke(cli, ["watch", "--", bad])
+            assert result.exit_code == 2, bad
+            assert "refusing" in result.output
