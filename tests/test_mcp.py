@@ -228,3 +228,25 @@ class TestErrorMapping:
         monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
         with pytest.raises(ToolError, match="Invalid"):
             mcp_server.logs_search(profile="p")
+
+
+class TestWindowValidation:
+    def test_non_numeric_bounds_are_tool_errors(self):
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        import signoz_cli.commands.mcp_server as _m
+
+        for kwargs in ({"start": "abc", "end": 5}, {"start": True},
+                       {"end": [1]}):
+            try:
+                _m._window(kwargs.get("start"), kwargs.get("end"),
+                           "1h", "1h", None)
+            except ToolError:
+                continue
+            raise AssertionError(f"no ToolError for {kwargs}")
+
+    def test_numeric_bounds_still_work(self):
+        import signoz_cli.commands.mcp_server as _m
+
+        s, e = _m._window(100, 50 + 3600_000, None, "1h", None)
+        assert (s, e) == (100, 3600050)
