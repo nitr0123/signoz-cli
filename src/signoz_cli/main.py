@@ -13,6 +13,7 @@ from signoz_cli.commands import (  # noqa: F401
     channels,
     dashboards,
     logs,
+    mcp_server,
     meta,
     metrics,
     raw,
