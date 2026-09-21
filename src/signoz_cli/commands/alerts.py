@@ -514,3 +514,26 @@ def downtime_delete(endpoint: str | None, token: str | None, fmt: str,
         emit(client.delete_downtime_schedule(schedule_id), fmt)
     except Exception as e:
         _handle_error(e)
+
+
+@alerts.command("lint")
+@click.argument("files", nargs=-1, required=True,
+                type=click.Path(exists=True, dir_okay=False))
+@click.option("-f", "--format", "fmt", type=click.Choice(["json", "table"]),
+              default="table", show_default=True, help="Output format.")
+@click.option("--strict", is_flag=True,
+              help="Fail on warnings as well as errors.")
+def alerts_lint(files: tuple[str, ...], fmt: str, strict: bool) -> None:
+    """Validate alert rule files offline (CI-friendly, exit 1 on errors).
+
+    Checks the live-verified v2 requirements (condition object) plus
+    naming/severity/portability warnings. Needs no server.
+
+    \b
+    Examples:
+      signoz alerts lint ./rules/*.json
+    """
+    from signoz_cli.commands.common import _lint_files
+    from signoz_cli.lint import lint_rule
+
+    _lint_files(files, fmt, strict, lint_rule)

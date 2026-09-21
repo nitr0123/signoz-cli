@@ -236,3 +236,27 @@ def dashboards_diff(
             click.echo("(no changes)")
     except Exception as e:
         _handle_error(e)
+
+
+@dashboards.command("lint")
+@click.argument("files", nargs=-1, required=True,
+                type=click.Path(exists=True, dir_okay=False))
+@click.option("-f", "--format", "fmt", type=click.Choice(["json", "table"]),
+              default="table", show_default=True, help="Output format.")
+@click.option("--strict", is_flag=True,
+              help="Fail on warnings as well as errors.")
+def dashboards_lint(files: tuple[str, ...], fmt: str, strict: bool) -> None:
+    """Validate dashboard files offline (CI-friendly, exit 1 on errors).
+
+    Checks the live-verified v2 requirements (schemaVersion v6, name,
+    spec.variables/layouts) plus portability warnings. Needs no server.
+
+    \b
+    Examples:
+      signoz dashboards lint ./dashboards/*.json
+      signoz dashboards lint bundle/dashboards/ --strict
+    """
+    from signoz_cli.commands.common import _lint_files
+    from signoz_cli.lint import lint_dashboard
+
+    _lint_files(files, fmt, strict, lint_dashboard)
