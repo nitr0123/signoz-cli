@@ -1325,6 +1325,44 @@ def _pagination_meta(total: int, offset: int, limit: int) -> dict[str, Any]:
     }
 
 
+def _lint_files(
+    files: tuple[str, ...],
+    fmt: str,
+    strict: bool,
+    check: Any,
+) -> None:
+    """Run a lint checker over files and report findings (offline command).
+
+    Each finding row is ``{file, level, check, message}``. Exits 1 when
+    any error (or any warning under ``--strict``) is found; prints an
+    all-clean notice otherwise. Unreadable files count as errors.
+    """
+    from signoz_cli.output import emit
+
+    rows: list[dict[str, Any]] = []
+    failed = False
+    for path in files:
+        try:
+            doc = _read_json(path)
+        except Exception as ex:
+            rows.append({
+                "file": path, "level": "error",
+                "check": "read", "message": str(ex),
+            })
+            failed = True
+            continue
+        for finding in check(doc):
+            rows.append({"file": path, **finding})
+            if finding["level"] == "error" or strict:
+                failed = True
+    if not rows:
+        click.echo("OK: all files clean.")
+        return
+    emit(rows, fmt)
+    if failed:
+        sys.exit(1)
+
+
 def _maybe_emit_chart(rows: Any, fmt: str, chart: bool) -> bool:
     """Render time-series rows as an ASCII chart for --chart.
 

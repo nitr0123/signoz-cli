@@ -230,6 +230,8 @@ signoz dashboards create dashboard.json       # v2 spec schema
 signoz dashboards update UUID dashboard.json  # full replace
 signoz dashboards patch UUID patch.json       # JSON-Patch array
 signoz dashboards delete UUID
+signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
+signoz alerts lint ./rules/*.json
 ```
 
 Create payloads must use the v2 schema and include `"schemaVersion": "v6"` and a

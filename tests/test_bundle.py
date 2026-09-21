@@ -782,3 +782,81 @@ class TestDestructiveSemantics:
         assert state["deleted"] == "v1"
         # The failed replacement was followed by a restore of the old doc.
         assert state["creates"][-1].get("spec") == {"a": 1}
+
+
+class TestLint:
+    def _write(self, tmp_path, name, doc):
+        import json as _json
+
+        p = tmp_path / name
+        p.write_text(_json.dumps(doc))
+        return str(p)
+
+    def test_dashboard_valid(self, tmp_path):
+        from signoz_cli.lint import lint_dashboard
+
+        findings = lint_dashboard({
+            "schemaVersion": "v6", "name": "D",
+            "spec": {"variables": [], "layouts": [],
+                     "panels": {"p1": {"queries": []}}}})
+        assert findings == []
+
+    def test_dashboard_errors_live_grounded(self, tmp_path):
+        from signoz_cli.lint import lint_dashboard
+
+        assert any(f["check"] == "schema-version"
+                   for f in lint_dashboard({}))
+        assert any(f["check"] == "name"
+                   for f in lint_dashboard({"schemaVersion": "v6"}))
+        assert any(f["check"] == "spec.variables"
+                   for f in lint_dashboard(
+                       {"schemaVersion": "v6", "name": "D", "spec": {}}))
+        assert any(f["check"] == "spec.layouts"
+                   for f in lint_dashboard(
+                       {"schemaVersion": "v6", "name": "D",
+                        "spec": {"variables": []}}))
+
+    def test_dashboard_warnings(self, tmp_path):
+        from signoz_cli.lint import lint_dashboard
+
+        findings = lint_dashboard({
+            "schemaVersion": "v6", "name": "D",
+            "spec": {"variables": [], "layouts": []},
+            "id": "abc", "locked": True})
+        levels = {f["check"] for f in findings if f["level"] == "warning"}
+        assert {"panels", "portability", "readonly-field"} <= levels
+
+    def test_rule_errors_and_warnings(self, tmp_path):
+        from signoz_cli.lint import lint_rule
+
+        assert any(f["check"] == "condition" for f in lint_rule({}))
+        assert lint_rule({"condition": {}}) != []
+        ok = lint_rule({"alert": "R", "condition": {"x": 1},
+                        "labels": {"severity": "critical"}})
+        assert ok == []
+
+    def test_lint_command_exit_codes(self, runner, tmp_path):
+        from signoz_cli.main import cli
+
+        good = self._write(tmp_path, "good.json", {
+            "schemaVersion": "v6", "name": "D",
+            "spec": {"variables": [], "layouts": [],
+                     "panels": {"p1": {"queries": []}}}})
+        bad = self._write(tmp_path, "bad.json", {"name": "D"})
+        result = runner.invoke(cli, ["dashboards", "lint", good])
+        assert result.exit_code == 0, result.output
+        assert "clean" in result.output
+        result = runner.invoke(cli, ["dashboards", "lint", bad])
+        assert result.exit_code == 1
+        assert "schema-version" in result.output
+        result = runner.invoke(
+            cli, ["dashboards", "lint", good, "--strict"])
+        assert result.exit_code == 0
+        warn_only = self._write(tmp_path, "warn.json", {
+            "schemaVersion": "v6", "name": "D",
+            "spec": {"variables": [], "layouts": []}})
+        result = runner.invoke(cli, ["dashboards", "lint", warn_only])
+        assert result.exit_code == 0  # warnings pass by default
+        result = runner.invoke(
+            cli, ["dashboards", "lint", warn_only, "--strict"])
+        assert result.exit_code == 1  # panels warning fails strict
