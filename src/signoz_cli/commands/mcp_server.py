@@ -80,8 +80,15 @@ def _require_mutations(tool_name: str) -> None:
 
 
 def _client(profile: str | None, endpoint: str | None):
-    """Build a client from tool overrides, falling back to server defaults."""
-    return _get_client(endpoint or _DEFAULT_ENDPOINT, None, profile or _DEFAULT_PROFILE)
+    """Build a client from tool overrides, falling back to server defaults.
+
+    Credential/endpoint problems surface as client-facing tool errors,
+    never as server-side crashes with tracebacks.
+    """
+    try:
+        return _get_client(endpoint or _DEFAULT_ENDPOINT, None, profile or _DEFAULT_PROFILE)
+    except click.UsageError as ex:
+        _fail(f"Invalid arguments: {ex.message}")
 
 
 def _clean(data: Any) -> Any:
@@ -107,6 +114,8 @@ def _window(
         )
     except ValueError as ex:
         _fail(f"Invalid time arguments: {ex}")
+    except click.UsageError as ex:
+        _fail(f"Invalid arguments: {ex.message}")
 
 
 def _call(fn, *args, **kwargs) -> Any:

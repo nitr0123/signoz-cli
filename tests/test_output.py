@@ -657,3 +657,25 @@ class TestCharts:
             assert "--chart" in bad.output
         finally:
             cm.SigNozClient = saved
+
+
+class TestChartNonFinite:
+    def test_inf_nan_points_skipped(self):
+        from signoz_cli.output import render_chart
+
+        out = render_chart([
+            {"series": "a", "timestamp": 1, "value": float("inf")},
+            {"series": "a", "timestamp": 2, "value": 2.0},
+            {"series": "b", "timestamp": 1, "value": float("nan")},
+        ], width=40)
+        assert "last=2" in out
+        assert "inf" not in out and "nan" not in out
+
+    def test_all_non_finite_rejected_cleanly(self):
+        import pytest
+
+        from signoz_cli.output import render_chart
+
+        with pytest.raises(ValueError, match="plottable"):
+            render_chart([{"series": "a", "timestamp": 1,
+                           "value": float("inf")}])
