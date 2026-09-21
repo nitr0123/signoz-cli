@@ -17,6 +17,7 @@ from signoz_cli.commands import (  # noqa: F401
     meta,
     metrics,
     raw,
+    saved,
     services,
     traces,
     update,
