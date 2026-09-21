@@ -288,6 +288,9 @@ signoz channels list                 # admin only
 signoz service-accounts list         # admin only
 signoz views list                    # saved views
 signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
+signoz export ./backup -p prod       # dashboards/rules/channels/views bundle
+signoz apply ./backup -p staging --dry-run   # declarative sync preview
+signoz apply ./backup -p staging --prune --yes  # sync + delete unmanaged
 signoz logs search --all             # auto-paginate everything
 signoz logs search -f csv -o out.csv # CSV to file
 signoz --timeout 30 --insecure auth verify   # TLS/proxy options; retries on 429/5xx are automatic
