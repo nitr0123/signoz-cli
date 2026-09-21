@@ -453,3 +453,87 @@ def metrics_top(
         emit(out, fmt, table_keys=["series", "timestamp", "value"])
     except Exception as ex:
         _handle_error(ex)
+
+
+@metrics.command("cardinality")
+@_common_options
+@click.argument("metric_name")
+@click.option("--by", "group_by", required=True,
+              help="Comma-separated attribute keys; one probe per key.")
+@click.option("--top", "top_n", type=int, default=10, show_default=True,
+              help="Show the top N groups per attribute.")
+@click.option("--temporality", default=None,
+              type=click.Choice(["Unspecified", "Delta", "Cumulative"]),
+              help="Metric temporality (default Cumulative for counts).")
+@click.option("--filter", "filter_expr", default="", help="Filter expression.")
+@click.option("--step", type=int, default=300, show_default=True,
+              help="Step interval in seconds.")
+@_time_options(default_range="24h")
+def metrics_cardinality(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    metric_name: str,
+    group_by: str,
+    top_n: int,
+    temporality: str | None,
+    filter_expr: str,
+    step: int,
+    time_range: str | None,
+    start: int | None,
+    end: int | None,
+) -> None:
+    """Show per-attribute series cardinality and top groups by volume.
+
+    Runs one count query per --by key: `groups` is the number of distinct
+    series for that attribute (the cardinality driver to watch for cost),
+    `events` the window total per group. Defaults to Cumulative, which is
+    what sample counts need; override with --temporality if you know why.
+    """
+    if top_n <= 0:
+        raise click.UsageError("--top must be positive.")
+    if step <= 0:
+        raise click.UsageError("--step must be positive (seconds per bucket).")
+    labels = [g.strip() for g in group_by.split(",") if g.strip()]
+    if not labels:
+        raise click.UsageError("--by needs at least one attribute key.")
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h", profile_time_range=_profile_time_range(profile))
+        rows: list[dict[str, Any]] = []
+        for label in labels:
+            payload = build_metrics_query_payload(
+                s, e, metric_name,
+                temporality=temporality or "Cumulative",
+                time_aggregation="count",
+                space_aggregation="sum",
+                group_by=[label],
+                filter_expression=filter_expr,
+                step_interval=step,
+            )
+            resp = client.query_builder_v5(payload)
+            _warn_v5(resp)
+            totals: dict[str, float] = {}
+            for row in _unwrap_time_series(resp):
+                if not isinstance(row, dict):
+                    continue
+                raw_value = row.get("value")
+                if raw_value is None:
+                    continue
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if value != value:  # NaN carries no volume information
+                    continue
+                series = str(row.get("series", ""))
+                totals[series] = totals.get(series, 0.0) + value
+            ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:top_n]
+            for series, total in ranked:
+                group = series.split("=", 1)[-1] if "=" in series else series
+                rows.append({"label": label, "groups": len(totals),
+                             "group": group, "events": total})
+        emit(rows, fmt, table_keys=["label", "groups", "group", "events"])
+    except Exception as ex:
+        _handle_error(ex)

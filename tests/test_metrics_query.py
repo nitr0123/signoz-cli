@@ -1,5 +1,7 @@
 """Tests for metrics/promql/sql payloads and time-series unwrapping."""
 
+import pytest
+from click.testing import CliRunner
 
 from signoz_cli.main import _unwrap_time_series, _warn_v5
 from signoz_cli.query import (
@@ -7,6 +9,11 @@ from signoz_cli.query import (
     build_promql_query_payload,
     build_sql_query_payload,
 )
+
+
+@pytest.fixture()
+def runner():
+    return CliRunner()
 
 
 class TestMetricsPayload:
@@ -171,3 +178,69 @@ class TestResolveMetricTemporality:
     def test_explicit_nondefault_agg_kept_for_sum(self):
         c = _MetaFake([{"key": "m", "type": "Sum"}])
         assert self._resolve(c, "m", "p95", None, "avg") == ("p95", "Unspecified")
+
+
+class TestCardinality:
+    def _fake(self, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                groups = payload["compositeQuery"]["queries"][0][
+                    "spec"]["groupBy"]
+                label = groups[0]["name"] if groups else "?"
+                return {"status": "success", "data": {
+                    "type": "time_series",
+                    "data": {"results": [{"aggregations": [{"series": [
+                        {"labels": [{"key": "k", "value": label + "=a"}],
+                         "values": [{"timestamp": 1, "value": 5.0}]},
+                        {"labels": [{"key": "k", "value": label + "=b"}],
+                         "values": [{"timestamp": 1, "value": 2.0}]},
+                    ]}]}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+
+    def test_groups_and_top(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        self._fake(monkeypatch)
+        result = runner.invoke(
+            cli, ["metrics", "cardinality", "m", "--by", "service.name"])
+        assert result.exit_code == 0, result.output
+        assert "service.name" in result.output
+        assert "signoz-cli-e2e" not in result.output
+        assert "2" in result.output  # groups count
+
+    def test_top_truncates(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        monkeypatch.setenv("SIGNOZ_ENDPOINT", "http://sig.test:8080")
+        monkeypatch.setenv("SIGNOZ_ACCESS_TOKEN", "tok-123456789")
+        monkeypatch.delenv("SIGNOZ_PROFILE", raising=False)
+        self._fake(monkeypatch)
+        result = runner.invoke(
+            cli, ["metrics", "cardinality", "m", "--by", "a,b", "--top", "1",
+                  "--json"])
+        import json as _json
+
+        rows = _json.loads(result.stdout)
+        assert len(rows) == 2
+        assert all(r["group"].endswith("=a") for r in rows)
+
+    def test_bad_flags_rejected(self, runner):
+        from signoz_cli.main import cli
+
+        for args in [["metrics", "cardinality", "m", "--by", "x",
+                      "--top", "0"],
+                     ["metrics", "cardinality", "m", "--by", "  "]]:
+            result = runner.invoke(cli, args)
+            assert result.exit_code == 2, args
