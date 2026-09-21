@@ -165,3 +165,100 @@ class TestSkeletonOption:
         assert result.exit_code == 0, result.output
         assert marker in result.output
         _json.loads(result.output)  # must stay machine-readable
+
+
+class TestDoctor:
+    def _cfg(self, monkeypatch, tmp_path, doc):
+        import json as _json
+
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr("signoz_cli.commands.common.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.commands.common.CONFIG_FILE",
+            tmp_path / "config.json")
+        monkeypatch.setattr("signoz_cli.commands.auth.CONFIG_FILE",
+                            tmp_path / "config.json")
+        if doc is not None:
+            (tmp_path / "config.json").write_text(_json.dumps(doc))
+        for var in ("SIGNOZ_ENDPOINT", "SIGNOZ_ACCESS_TOKEN",
+                    "SIGNOZ_PROFILE", "SIGNOZ_INSECURE"):
+            monkeypatch.delenv(var, raising=False)
+
+    def _fake(self, monkeypatch, verify=None, version="v0.138.0"):
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            endpoint = "http://sig.test:8080"
+
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def verify(self):
+                if isinstance(verify, Exception):
+                    raise verify
+                return {"status": "success",
+                        "data": {"name": "svc", "id": "1"}}
+
+            def get_server_version(self):
+                return {"version": version}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+
+    def test_all_pass(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._cfg(monkeypatch, tmp_path, {
+            "default": "p",
+            "profiles": {"p": {"endpoint": "http://sig.test:8080",
+                               "token": "tok-123456789"}}})
+        (tmp_path / "config.json").chmod(0o600)
+        self._fake(monkeypatch)
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 0, result.output
+        assert "pass" in result.output
+        assert "tok-123456789" not in result.output
+
+    def test_missing_credentials_fails(self, runner, monkeypatch, tmp_path):
+        from signoz_cli.main import cli
+
+        self._cfg(monkeypatch, tmp_path, {})
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 1
+        assert "fail" in result.output
+
+    def test_bad_auth_fails_without_traceback(
+            self, runner, monkeypatch, tmp_path):
+        import httpx as _httpx
+
+        from signoz_cli.main import cli
+
+        self._cfg(monkeypatch, tmp_path, {
+            "default": "p",
+            "profiles": {"p": {"endpoint": "http://sig.test:8080",
+                               "token": "tok-123456789"}}})
+        self._fake(monkeypatch,
+                   verify=_httpx.ConnectError("refused"))
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(
+            result.exception, SystemExit)
+
+    def test_corrupt_config_survives(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        from signoz_cli.main import cli
+
+        self._cfg(monkeypatch, tmp_path, None)
+        (tmp_path / "config.json").write_text(_json.dumps(
+            {"default": ["x"],
+             "profiles": {"p": "not-a-dict"}}))
+        self._fake(monkeypatch)
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exception is None or isinstance(
+            result.exception, SystemExit)
+        assert "Traceback" not in (result.output or "")

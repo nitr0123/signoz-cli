@@ -5,12 +5,14 @@ from __future__ import annotations
 import click
 
 from signoz_cli.commands.common import (
+    SUPPORTED_SIGNOZ_RANGE,
     _common_options,
     _get_client,
     _handle_error,
     _has_url_userinfo,
     _history_path,
     _is_supported_server,
+    _is_truthy,
     _read_history,
     _redact_userinfo,
     _selected_profile_name,
@@ -33,6 +35,145 @@ def completion(shell: str) -> None:
     """
     click.echo(f"# Add this to your {shell} configuration:")
     click.echo(f'eval "$(_SIGNOZ_COMPLETE={shell}_source signoz)"')
+
+
+@cli.command("doctor")
+@_common_options
+def doctor_cmd(endpoint: str | None, token: str | None, fmt: str,
+               profile: str | None) -> None:
+    """Diagnose local setup and server connectivity (support-bundle style).
+
+    Runs config, credential, TLS, connectivity, auth and version checks
+    and reports pass/warn/fail per check. Never prints secrets. Exits 1
+    when any check fails (warnings alone still exit 0).
+    """
+    import os as _os
+    import stat as _stat
+
+    import httpx as _httpx
+
+    from signoz_cli.commands.common import _mask_token as _mask
+    from signoz_cli.commands.common import _resolve_credentials as _resolve
+    from signoz_cli.config import (
+        CONFIG_FILE,
+        get_profiles,
+        load_config,
+        select_profile_name,
+    )
+
+    rows: list[dict[str, str]] = []
+
+    def _row(check: str, status: str, detail: str) -> None:
+        rows.append({"check": check, "status": status, "detail": detail})
+
+    # 1. Config file.
+    cfg = load_config()
+    if not CONFIG_FILE.exists():
+        _row("config", "warn",
+             f"No config file yet ({CONFIG_FILE}); "
+             "use 'signoz configure' or env vars.")
+    elif not isinstance(cfg, dict):
+        _row("config", "fail", f"{CONFIG_FILE} does not contain an object.")
+    else:
+        try:
+            mode = oct(_stat.S_IMODE(CONFIG_FILE.stat().st_mode))
+        except OSError as ex:
+            mode = f"<unreadable: {ex}>"
+        if mode == "0o600":
+            _row("config", "pass", f"{CONFIG_FILE} readable, mode 0600.")
+        else:
+            _row("config", "warn",
+                 f"{CONFIG_FILE} mode is {mode} (expected 0o600).")
+    profiles = get_profiles(cfg) if isinstance(cfg, dict) else {}
+    selected = None
+    try:
+        selected = select_profile_name(
+            cfg if isinstance(cfg, dict) else {}, profile,
+            _os.getenv("SIGNOZ_PROFILE"))
+    except Exception:
+        selected = None
+    # Doctor must survive the corrupt configs it diagnoses: only trust
+    # string profile names mapping to objects.
+    prof = profiles.get(selected, {}) if isinstance(selected, str) else {}
+    if not isinstance(prof, dict):
+        prof = {}
+    if selected is None:
+        _row("profile", "pass",
+             "No profile selected (flags/env/legacy config).")
+    elif (isinstance(selected, str) and selected in profiles
+            and isinstance(profiles[selected], dict)):
+        _row("profile", "pass", f"Using profile '{selected}'.")
+    else:
+        _row("profile", "warn",
+             f"Selected profile {selected!r} is not a valid profile.")
+
+    # 2. Credentials resolvable (never echoed raw).
+    try:
+        ep, tok = _resolve(endpoint, token, profile)
+    except Exception as ex:
+        _row("credentials", "fail", str(ex))
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    if not ep or not tok:
+        _row("credentials", "fail",
+             "Missing endpoint/token. Set via --endpoint/--token, "
+             "SIGNOZ_* env vars, or 'signoz configure'.")
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    _row("credentials", "pass",
+         f"Endpoint {_redact_userinfo(ep)}, token {_mask(tok)}.")
+
+    # 3. TLS posture.
+    insecure = (_os.getenv("SIGNOZ_INSECURE", "") == "1"
+                or _is_truthy(prof.get("insecure")))
+    _row("tls", "warn" if insecure else "pass",
+         "Certificate verification DISABLED (insecure)."
+         if insecure else "Certificate verification enabled.")
+
+    # 4-6. Connectivity, auth, version.
+    try:
+        client = _get_client(endpoint, token, profile)
+    except Exception as ex:
+        _row("connect", "fail", f"Cannot configure client: {ex}")
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    try:
+        me = client.verify()
+        account = me.get("data", me) if isinstance(me, dict) else me
+        name = account.get("name", "") if isinstance(account, dict) else ""
+        _row("connect", "pass", f"Reached {client.endpoint}.")
+        _row("auth", "pass",
+             f"API key accepted{f' (service account {name!r})' if name else ''}.")
+    except _httpx.ConnectError as ex:
+        _row("connect", "fail", f"Cannot connect: {ex}")
+        _row("auth", "fail", "Skipped (no connection).")
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    except _httpx.TimeoutException:
+        _row("connect", "fail", "Connection timed out (--timeout raises it).")
+        _row("auth", "fail", "Skipped (no connection).")
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    except Exception as ex:
+        _row("connect", "pass", f"Reached {client.endpoint}.")
+        _row("auth", "fail", f"API key rejected: {ex}")
+        emit(rows, fmt)
+        raise SystemExit(1) from None
+    try:
+        server_version = (client.get_server_version() or {}).get("version", "")
+    except Exception:
+        server_version = ""
+    if not server_version:
+        _row("version", "warn", "Server version unknown.")
+    elif _is_supported_server(server_version):
+        _row("version", "pass",
+             f"Server {server_version} in tested range "
+             f"({SUPPORTED_SIGNOZ_RANGE}).")
+    else:
+        _row("version", "warn",
+             f"Server {server_version} outside tested range "
+             f"({SUPPORTED_SIGNOZ_RANGE}).")
+    emit(rows, fmt)
 
 
 @cli.command("status")

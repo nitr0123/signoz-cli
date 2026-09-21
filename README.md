@@ -118,7 +118,9 @@ Credentials are resolved in this order:
 
 On self-hosted SigNoz, create a key under **Settings → Service Accounts → Keys**
 (the account needs at least the Viewer role; Admin creates service accounts).
-Verify credentials any time with `signoz auth verify`.
+Verify credentials any time with `signoz auth verify`. For full
+config/auth/TLS/version diagnostics (support-bundle style, never prints
+secrets), run `signoz doctor`.
 
 ### Multiple SigNoz instances (profiles)
 
