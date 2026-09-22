@@ -578,11 +578,12 @@ def watch_cmd(interval: float, command: tuple[str, ...]) -> None:
     if root in (
         "watch", "mcp", "completion", "update",
         "configure", "profile", "history", "rerun",
+        "apply", "import", "export",
     ):
         raise click.UsageError(
             f"watch: refusing to wrap '{root}' "
             "(interactive, long-lived, credential/state-touching, "
-            "or self-modifying)."
+            "self-modifying, or repeatedly mutating)."
         )
     import subprocess as _sp
     import sys as _sys

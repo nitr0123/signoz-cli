@@ -68,7 +68,7 @@ def fake_client(monkeypatch):
 
 class TestToolInventory:
     def test_expected_tool_count(self):
-        assert len(mcp_server._READ_TOOLS) == 19
+        assert len(mcp_server._READ_TOOLS) == 24
         assert len(mcp_server._MUTATION_TOOLS) == 10
 
     def test_no_token_in_any_schema(self):
@@ -180,7 +180,7 @@ class TestStdioProtocol:
             names = {t["name"] for t in listed["result"]["tools"]}
             assert "logs_search" in names
             assert "dashboards_delete" in names
-            assert len(names) == 29
+            assert len(names) == 34
             # Mutation refusal arrives without any connection made: v2
             # reports tool failures as result.isError (not top-level error).
             refused = _rpc(3, "tools/call", {
@@ -250,3 +250,48 @@ class TestWindowValidation:
 
         s, e = _m._window(100, 50 + 3600_000, None, "1h", None)
         assert (s, e) == (100, 3600050)
+
+
+class TestNewReadTools:
+    def test_doctor_has_no_secrets(self, fake_client):
+        out = mcp_server.doctor_check()
+        assert isinstance(out, list)
+        assert "tok-" not in str(out)
+
+    def test_cardinality(self, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def query_builder_v5(self, payload):
+                return {"status": "success", "data": {
+                    "type": "time_series",
+                    "data": {"results": [{"aggregations": [{"series": [{
+                        "labels": [{"key": "k", "value": "v"}],
+                        "values": [{"timestamp": 1,
+                                    "value": 3.0}]}]}]}]}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        out = mcp_server.metrics_cardinality("m", "service.name")
+        assert out == [{"label": "service.name", "groups": 1,
+                        "group": "v", "events": 3.0}]
+
+    def test_saved_round_trip(self, tmp_path, monkeypatch):
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        import signoz_cli.commands.saved as _sv
+
+        monkeypatch.setattr(_sv, "CONFIG_DIR", tmp_path)
+        assert mcp_server.saved_list() == []
+        _sv._write_saved([{"name": "q", "kind": "sql",
+                           "payload": "SELECT 1", "saved_at": "t"}])
+        assert mcp_server.saved_list() == [
+            {"name": "q", "kind": "sql", "saved_at": "t"}]
+        assert mcp_server.saved_show("q")["payload"] == "SELECT 1"
+        with pytest.raises(ToolError, match="Unknown query"):
+            mcp_server.saved_show("nope")
