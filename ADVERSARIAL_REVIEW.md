@@ -75,6 +75,27 @@ files to other local users and widens the tampering surface for S1.
 **Fix.** New `_ensure_config_dir()` creates the directory `0700` and
 tightens an existing loose one; every writer calls it.
 
+### S3 — Spreadsheet formula injection via CSV output (Medium-Low) — FIXED
+
+**What.** Telemetry values flowed byte-for-byte into `-o csv` cells. A
+value starting with `=`, `+`, `-` or `@` executes as a formula when the
+CSV is opened in Excel/Sheets — reproduced with `=2+5`,
+`=HYPERLINK("http://evil","click")`, `+cmd|'/c calc'!A0`, `@SUM(1+1)`.
+The known escalation is exfiltration via `=IMPORTXML`/`=IMAGE` against
+an attacker URL, or credentialed phishing via `=HYPERLINK`.
+
+**Fix.** `_csv_cell()` prefixes risky *string* cells with a single
+quote (OWASP-recommended neutralization), forcing text interpretation.
+Numeric values pass through untouched, so machine pipelines
+(awk/jq/csvkit) see identical data; JSON/YAML/table output is unchanged
+by design. Regression tests pin exact round-trip behavior.
+
+**Audit note.** `install.sh` received its first adversarial shell review
+in this round and is clean: `set -eu`, no `curl|sh`, no temp files, all
+expansions quoted except two intentional word-splitting knobs
+(`SIGNOZ_PIP`, documented, requires control of the user's own env);
+registry credentials travel in a Basic-auth header, never the URL.
+
 ### Process incident (disclosed)
 
 While probing S1, a test harness patched `config.CONFIG_DIR` but not
@@ -111,6 +132,7 @@ package directly.
 | 17 | MCP non-numeric timestamp bounds raised `TypeError` | CWE-20 | `_window` validation (#37, #44) |
 | 18 | `apply` non-object docs, id-less prune DELETEs, empty-bundle prune | CWE-20/693 | guards + refusal (#44) |
 | 19 | Uncapped text-file reads in `saved save --file` | CWE-400 | 32 MiB cap (#44) |
+| 20 | CSV formula injection: hostile telemetry values emitted raw into `-o csv` cells | CWE-1236 | single-quote prefix on risky string cells (#47) |
 
 ---
 

@@ -548,8 +548,27 @@ def _to_csv(rows: list[dict[str, Any]]) -> str:
     if not _NO_HEADERS:
         writer.writeheader()
     for row in rows:
-        writer.writerow({k: row.get(k, "") for k in keys})
+        writer.writerow({k: _csv_cell(row.get(k, "")) for k in keys})
     return buf.getvalue()
+
+
+def _csv_cell(value: Any) -> Any:
+    """Neutralize spreadsheet formula injection (CWE-1236) in CSV cells.
+
+    Telemetry values are attacker-influenced; a cell starting with
+    ``=``, ``+``, ``-`` or ``@`` (or tab/CR) executes as a formula when
+    the CSV is opened in Excel/Sheets, enabling anything from phishing
+    links (``=HYPERLINK``) to data exfiltration (``=IMPORTXML`` against
+    an attacker URL). Prefixing such *string* cells with a single quote
+    forces text interpretation. Numeric values pass through untouched so
+    machine pipelines (awk/jq/csvkit) see identical data; JSON/YAML/table
+    output is unchanged by design.
+    """
+    if not isinstance(value, str):
+        return value
+    if value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 # ---------------------------------------------------------------------------
