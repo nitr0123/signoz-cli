@@ -793,9 +793,12 @@ def _update_available() -> str | None:
         pass
     latest = _latest_remote_tag(repo)
     try:
-        path = _update_cache_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"checked_at": now, "latest": latest}))
+        from signoz_cli.config import _ensure_config_dir, _write_private
+
+        _ensure_config_dir()
+        _write_private(
+            _update_cache_path(),
+            json.dumps({"checked_at": now, "latest": latest}))
     except OSError:
         pass
     if latest and _parse_version(latest) > current:
@@ -885,8 +888,9 @@ def _record_history(args: list[str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Private from birth (see config._write_private): history once
         # held raw --token values in older releases.
-        from signoz_cli.config import _write_private
+        from signoz_cli.config import _ensure_config_dir, _write_private
 
+        _ensure_config_dir()
         _write_private(path, json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
         try:
             path.chmod(0o600)

@@ -248,3 +248,66 @@ class TestPrivateFileCreation:
         assert load_config()["profiles"]["p"]["token"] == "t"
         assert _stat.S_IMODE(
             (tmp_path / "config.json").stat().st_mode) == 0o600
+
+
+class TestWriteHardening:
+    def test_symlink_write_refused(self, tmp_path):
+        import os as _os
+
+        from signoz_cli.config import _write_private
+
+        outside = tmp_path / "victim.txt"
+        outside.write_text("ORIGINAL")
+        link = tmp_path / "secret.json"
+        _os.symlink(outside, link)
+        with pytest.raises(OSError, match="symlink"):
+            _write_private(link, "PWNED")
+        assert outside.read_text() == "ORIGINAL"
+
+    def test_config_dir_tightened_to_0700(self, tmp_path):
+        import stat as _stat
+
+        import signoz_cli.config as _cfg
+
+        d = tmp_path / "loose"
+        d.mkdir(mode=0o777)
+        _os_umask = None
+        import os as _os
+
+        _os_umask = _os.umask(0)
+        try:
+            _os.chmod(d, 0o777)
+        finally:
+            _os.umask(_os_umask)
+        monkey = _cfg.CONFIG_DIR
+        _cfg.CONFIG_DIR = d
+        try:
+            _cfg._ensure_config_dir()
+            assert _stat.S_IMODE(d.stat().st_mode) == 0o700
+        finally:
+            _cfg.CONFIG_DIR = monkey
+
+    def test_history_symlink_not_followed(self, tmp_path, monkeypatch):
+        import os as _os
+
+        import signoz_cli.commands.common as cm
+
+        monkeypatch.setattr(cm, "CONFIG_DIR", tmp_path)
+        outside = tmp_path.parent / "h-victim.txt"
+        outside.write_text("ORIG")
+        _os.symlink(outside, tmp_path / "history.json")
+        cm._record_history(["logs", "search", "--limit", "1"])
+        assert outside.read_text() == "ORIG"
+
+    def test_saved_symlink_not_followed(self, tmp_path, monkeypatch):
+        import os as _os
+
+        import signoz_cli.commands.saved as sv
+
+        monkeypatch.setattr(sv, "CONFIG_DIR", tmp_path)
+        outside = tmp_path.parent / "q-victim.txt"
+        outside.write_text("ORIG")
+        _os.symlink(outside, tmp_path / "queries.json")
+        with pytest.raises(OSError, match="symlink"):
+            sv._write_saved([{"name": "x", "kind": "sql", "payload": "S"}])
+        assert outside.read_text() == "ORIG"

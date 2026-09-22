@@ -74,15 +74,11 @@ def _read_saved() -> list[dict[str, Any]]:
 
 def _write_saved(entries: list[dict[str, Any]]) -> None:
     """Persist saved queries (owner-only from birth)."""
-    from signoz_cli.config import _write_private
+    from signoz_cli.config import _ensure_config_dir, _write_private
 
     path = _queries_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_config_dir()
     _write_private(path, json.dumps(entries[-_QUERIES_LIMIT:], indent=2))
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
 
 
 def _find_saved(name: str) -> dict[str, Any] | None:
