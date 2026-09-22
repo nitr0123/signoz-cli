@@ -325,8 +325,9 @@ Point any MCP host at it (Claude Code `~/.claude.json`, Claude Desktop config):
 {"mcpServers": {"signoz": {"command": "signoz", "args": ["mcp", "-p", "prod"]}}}
 ```
 
-29 tools: log/trace/metric search, PromQL/SQL, dashboards, alerts (+history/test),
-services, views, channels, server status. Mutating tools (create/update/delete)
+34 tools: log/trace/metric search, PromQL/SQL, dashboards, alerts (+history/test),
+services, views, channels, server status, doctor diagnostics, metric
+cardinality, saved queries. Mutating tools (create/update/delete)
 refuse unless started with `--allow-mutations`. Authentication comes from
 profiles/env vars as usual — tokens are never tool arguments, so API keys
 can't land in agent transcripts.

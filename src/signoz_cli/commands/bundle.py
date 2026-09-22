@@ -310,6 +310,10 @@ def _normalize_dashboard(doc: dict[str, Any]) -> dict[str, Any]:
 
 def _create(client, kind: str, doc: dict[str, Any]) -> None:
     """Create one bundle item on the target instance."""
+    if not isinstance(doc, dict):
+        raise click.UsageError(
+            f"Cannot create {kind} item from a non-object document "
+            f"({type(doc).__name__}); bundle files must hold JSON objects.")
     body = _strip_volatile(doc)
     if kind == "dashboards":
         client.create_dashboard_v2(_normalize_dashboard(body))
@@ -533,15 +537,28 @@ def apply_bundle(
                     detail = "overwritten"
                 report.append({"kind": kind, "name": name, "action": action,
                                "detail": detail})
+        total_wanted = sum(len(v) for v in wanted_names.values())
+        if prune and total_wanted == 0:
+            raise click.UsageError(
+                "Refusing to prune against an empty bundle (that would "
+                "delete everything). Remove --prune or add bundle files.")
         if prune:
             for kind in kinds:
                 for name, item in sorted(existing[kind].items()):
                     if name in wanted_names[kind]:
                         continue
+                    item_id = item.get("id", "") if isinstance(item, dict) else ""
+                    if not item_id:
+                        # Never DELETE a collection path: an id-less entry
+                        # would target the bare kind URL. Skip loudly.
+                        report.append({"kind": kind, "name": name,
+                                       "action": "skipped",
+                                       "detail": "missing server id"})
+                        continue
                     if dry_run:
                         action, detail = "delete", "dry-run"
                     else:
-                        _delete_item(client, kind, item.get("id", ""))
+                        _delete_item(client, kind, item_id)
                         action, detail = "deleted", ""
                     report.append({"kind": kind, "name": name,
                                    "action": action, "detail": detail})

@@ -537,6 +537,188 @@ def server_status(
         client.close()
 
 
+def doctor_check(
+    profile: str | None = None,
+    endpoint: str | None = None,
+) -> Any:
+    """Run config/credential/TLS/connectivity/auth/version diagnostics.
+
+    Returns pass/warn/fail rows; secrets are never included.
+    """
+    import stat as _stat
+
+    from signoz_cli.config import (
+        CONFIG_FILE,
+        load_config,
+        select_profile_name,
+    )
+
+    rows: list[dict[str, str]] = []
+    cfg = load_config()
+    if not CONFIG_FILE.exists():
+        rows.append({"check": "config", "status": "warn",
+                     "detail": "No config file yet."})
+    elif not isinstance(cfg, dict):
+        rows.append({"check": "config", "status": "fail",
+                     "detail": "Config file does not contain an object."})
+    else:
+        try:
+            mode = oct(_stat.S_IMODE(CONFIG_FILE.stat().st_mode))
+        except OSError:
+            mode = "unknown"
+        rows.append({"check": "config", "status": "pass"
+                     if mode == "0o600" else "warn",
+                     "detail": f"Config mode is {mode}."})
+    try:
+        selected = select_profile_name(
+            cfg if isinstance(cfg, dict) else {}, profile, None)
+    except Exception:
+        selected = None
+        rows.append({"check": "profile", "status": "pass",
+                     "detail": f"Using profile '{selected}'."
+                     if selected else "No profile selected."})
+    try:
+        client = _client(profile, endpoint)
+    except Exception as ex:
+        rows.append({"check": "credentials", "status": "fail", "detail": str(ex)})
+        return _clean(rows)
+    try:
+        me = _call(client.verify)
+        account = me.get("data", me) if isinstance(me, dict) else me
+        name = account.get("name", "") if isinstance(account, dict) else ""
+        rows.append({"check": "auth", "status": "pass",
+                     "detail": f"API key accepted{f' ({name})' if name else ''}."})
+    except Exception as ex:
+        rows.append({"check": "auth", "status": "fail", "detail": str(ex)})
+        return _clean(rows)
+    finally:
+        client.close()
+    try:
+        server_version = (client.get_server_version() or {}).get("version", "")
+    except Exception:
+        server_version = ""
+    rows.append({"check": "version", "status": "pass"
+                 if _is_supported_server(server_version) else "warn",
+                 "detail": f"Server {server_version or '<unknown>'}"})
+    return _clean(rows)
+
+
+def metrics_cardinality(
+    metric_name: str,
+    group_by: str,
+    top_n: int = 10,
+    time_range: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    profile: str | None = None,
+    endpoint: str | None = None,
+) -> Any:
+    """Per-attribute series cardinality and top groups by volume."""
+    if top_n <= 0:
+        _fail("--top must be positive.")
+    from signoz_cli.query import build_metrics_query_payload
+
+    labels = [g.strip() for g in group_by.split(",") if g.strip()]
+    if not labels:
+        _fail("--by needs at least one attribute key.")
+    client = _client(profile, endpoint)
+    try:
+        s, e = _window(start, end, time_range, "24h", profile)
+        rows: list[dict[str, Any]] = []
+        for label in labels:
+            payload = build_metrics_query_payload(
+                s, e, metric_name, temporality="Cumulative",
+                time_aggregation="count", space_aggregation="sum",
+                group_by=[label], filter_expression="", step_interval=300)
+            totals: dict[str, float] = {}
+            for row in _unwrap_time_series(
+                    _call(client.query_builder_v5, payload)):
+                if not isinstance(row, dict):
+                    continue
+                raw_value = row.get("value")
+                if raw_value is None:
+                    continue
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if value != value:
+                    continue
+                series = str(row.get("series", ""))
+                totals[series] = totals.get(series, 0.0) + value
+            for series, total in sorted(
+                    totals.items(), key=lambda kv: -kv[1])[:top_n]:
+                group = series.split("=", 1)[-1] if "=" in series else series
+                rows.append({"label": label, "groups": len(totals),
+                             "group": group, "events": total})
+        return _clean(rows)
+    finally:
+        client.close()
+
+
+def saved_list() -> Any:
+    """List locally saved named queries (names, kinds, timestamps)."""
+    from signoz_cli.commands.saved import _read_saved
+
+    return _clean([{"name": e.get("name", ""), "kind": e.get("kind", ""),
+                    "saved_at": e.get("saved_at", "")}
+                   for e in _read_saved()])
+
+
+def saved_show(name: str) -> Any:
+    """Show one saved query definition by name."""
+    from signoz_cli.commands.saved import _find_saved
+
+    entry = _find_saved(name)
+    if entry is None:
+        _fail(f"Unknown query '{name}'.")
+    return _clean(entry)
+
+
+def saved_run(
+    name: str,
+    time_range: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    profile: str | None = None,
+    endpoint: str | None = None,
+) -> Any:
+    """Run a locally saved query with a fresh time window."""
+    from signoz_cli.commands.saved import _find_saved
+
+    entry = _find_saved(name)
+    if entry is None:
+        _fail(f"Unknown query '{name}'.")
+    assert isinstance(entry, dict)
+    kind = entry.get("kind")
+    payload = entry.get("payload")
+    client = _client(profile, endpoint)
+    try:
+        s, e = _window(start, end, time_range, "1h", profile)
+        if kind == "promql":
+            if not isinstance(payload, str):
+                _fail(f"Saved query '{name}' has a corrupt payload.")
+            step = entry.get("step", 60)
+            if not isinstance(step, int) or step <= 0:
+                _fail(f"Saved query '{name}' has an invalid step.")
+            resp = _call(client.query_promql, payload, s, e, step=step)
+            _warn_v5(resp)
+            return _clean(_unwrap_time_series(resp))
+        if kind == "sql":
+            if not isinstance(payload, str):
+                _fail(f"Saved query '{name}' has a corrupt payload.")
+            return _clean(_unwrap_v5(_call(client.query_sql, payload, s, e)))
+        if kind == "builder":
+            if not isinstance(payload, dict):
+                _fail(f"Saved query '{name}' has a corrupt payload.")
+            body = dict(payload)
+            body["start"], body["end"] = s, e
+            return _clean(_unwrap_v5(_call(client.query_builder_v5, body)))
+        _fail(f"Saved query '{name}' has unknown kind {kind!r}.")
+    finally:
+        client.close()
+
+
 # ---------------------------------------------------------------------------
 # Mutation tools (gated behind --allow-mutations)
 # ---------------------------------------------------------------------------
@@ -687,7 +869,8 @@ _READ_TOOLS = [
     logs_search, traces_search, traces_get, metrics_search, metrics_query,
     promql_query, sql_query, dashboards_list, dashboards_get, alerts_list,
     alerts_get, alerts_history, alerts_test, services_list, views_list,
-    views_get, channels_list, channels_get, server_status,
+    views_get, channels_list, channels_get, server_status, doctor_check,
+    metrics_cardinality, saved_list, saved_show, saved_run,
 ]
 _MUTATION_TOOLS = [
     dashboards_create, dashboards_update, dashboards_delete,
