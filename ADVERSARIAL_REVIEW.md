@@ -1,8 +1,10 @@
-# Adversarial Security Review — signoz-cli v0.5.38
+# Adversarial Security Review — signoz-cli v0.5.39
 
 Reviewer stance: hostile-but-benevolent engineer trying to leak credentials,
 corrupt data, hang a pipeline, or make the tool silently do the wrong thing.
 Reviewed against live SigNoz v0.138.0 (`:8080`) and v0.136.1 (`:8081`).
+Re-verified claim-by-claim against v0.5.39; every finding below was
+reproduced on the current tree before being listed as holding.
 
 Scope: `src/signoz_cli/` — client, config, output, query, timeutil,
 lint, and `commands/*` (including the MCP server).
