@@ -70,6 +70,21 @@ def _sweep_stale_tmps(max_age_s: float = 3600.0) -> None:
         pass
 
 
+def _ensure_config_dir() -> None:
+    """Create the config dir owner-only (0700), tightening existing dirs.
+
+    The directory holds credentials, history and saved queries; a
+    world- or group-accessible dir leaks filenames and eases local
+    tampering (e.g. planting symlinks for the writers below).
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        if CONFIG_DIR.stat().st_mode & 0o077:
+            CONFIG_DIR.chmod(0o700)
+    except OSError:
+        pass
+
+
 def _write_private(path: Path, text: str) -> None:
     """Write *text* to *path*, creating the file with mode 0600 from birth.
 
@@ -78,8 +93,18 @@ def _write_private(path: Path, text: str) -> None:
     leaving a window where another local user can read secrets (tokens)
     from the new file. ``os.open`` with an explicit mode never grants
     more than 0600 regardless of umask.
+
+    Symlinks are refused outright (``O_NOFOLLOW`` plus an explicit
+    check): a symlink planted at a secret path must never redirect the
+    write onto some other file the user owns.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if os.path.islink(path):
+        raise OSError(f"refusing to write through symlink: {path}")
+    fd = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+        0o600,
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -98,6 +123,7 @@ def save_config(data: dict[str, Any]) -> None:
     crash mid-write can never leave a truncated config behind.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_config_dir()
     _sweep_stale_tmps()
     tmp_path = CONFIG_DIR / f".config.json.{os.getpid()}.tmp"
     try:
