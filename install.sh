@@ -115,7 +115,9 @@ EOF
     fi
 elif [ "$WANT" = "latest" ]; then
     need git "needed to resolve the newest release tag"
-    TAG=$(git ls-remote --tags --sort=-v:refname "$REPO" 2>/dev/null \
+    # "--" ends option parsing: $REPO comes from the environment and must
+    # never be mistaken for a git flag (e.g. --upload-pack runs commands).
+    TAG=$(git ls-remote --tags --sort=-v:refname -- "$REPO" 2>/dev/null \
         | grep -oE 'refs/tags/v[0-9][0-9A-Za-z.\-]*' \
         | head -n 1 | sed 's#refs/tags/##') || true
     [ -n "${TAG:-}" ] || die "could not resolve the latest tag (check SSH access to $REPO)"

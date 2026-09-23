@@ -193,7 +193,13 @@ def update_cmd(apply: bool) -> None:
         cmd = [c.replace("{tag}", latest) for c in upgrade_argv]
         run_env = dict(os.environ)
         run_env.update(extra_env)
-        proc = subprocess.run(cmd, timeout=300, env=run_env)
+        try:
+            proc = subprocess.run(cmd, timeout=300, env=run_env)
+        except OSError as ex:
+            raise click.UsageError(
+                f"Cannot run the upgrade tool ({cmd[0] if cmd else '?'}): "
+                f"{ex}. Reinstall it or upgrade manually."
+            ) from None
         if proc.returncode != 0:
             raise click.UsageError(
                 f"Upgrade command failed with exit {proc.returncode}."

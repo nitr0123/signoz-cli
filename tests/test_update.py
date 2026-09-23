@@ -482,3 +482,44 @@ class TestGitUrlCredentialRedaction:
 
         monkeypatch.setattr(_sp, "run", lambda *a, **k: R())
         assert cm._latest_remote_tag("ssh://x/y.git") == "v0.6.0"
+
+
+class TestUpdaterHardening:
+    def test_ls_remote_end_of_options(self, monkeypatch):
+        import subprocess as _sp
+
+        import signoz_cli.commands.common as cm
+
+        seen = {}
+
+        class _R:
+            returncode = 0
+            stdout = "abc\trefs/tags/v0.6.0\n"
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            return _R()
+
+        monkeypatch.setattr(_sp, "run", fake_run)
+        assert cm._latest_remote_tag("--upload-pack=evil") == "v0.6.0"
+        argv = seen["argv"]
+        assert argv[:4] == ["git", "ls-remote", "--tags", "--"]
+        assert argv[4] == "--upload-pack=evil"
+
+    def test_missing_upgrade_tool_is_usage_error(self, runner, monkeypatch):
+        import subprocess as _sp
+
+        import signoz_cli.commands.update as _up
+
+        monkeypatch.setattr(_up, "_latest_remote_tag", lambda repo: "v0.6.0")
+        monkeypatch.setattr(_up, "__version__", "0.5.8")
+        monkeypatch.setattr(
+            _up, "_detect_install_method",
+            lambda: ("pipx", ["pipx-gone-bin", "x"], "do it"))
+        monkeypatch.setattr(
+            _sp, "run",
+            lambda *a, **k: (_ for _ in ()).throw(
+                FileNotFoundError(2, "x", "pipx-gone-bin")))
+        result = runner.invoke(cli, ["update", "--apply"])
+        assert result.exit_code == 2
+        assert "Cannot run the upgrade tool" in result.output
