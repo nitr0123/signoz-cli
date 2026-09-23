@@ -95,6 +95,8 @@ in this round and is clean: `set -eu`, no `curl|sh`, no temp files, all
 expansions quoted except two intentional word-splitting knobs
 (`SIGNOZ_PIP`, documented, requires control of the user's own env);
 registry credentials travel in a Basic-auth header, never the URL.
+A follow-up probe found the repo value itself could be mistaken for a
+git flag, closed with `--` end-of-options in both call sites.
 
 ### Process incident (disclosed)
 
@@ -133,6 +135,7 @@ package directly.
 | 18 | `apply` non-object docs, id-less prune DELETEs, empty-bundle prune | CWE-20/693 | guards + refusal (#44) |
 | 19 | Uncapped text-file reads in `saved save --file` | CWE-400 | 32 MiB cap (#44) |
 | 20 | CSV formula injection: hostile telemetry values emitted raw into `-o csv` cells | CWE-1236 | single-quote prefix on risky string cells (#47) |
+| 21 | Env-controlled repo passed to `git ls-remote` as a potential flag (`--upload-pack` executes commands) | CWE-88 | `--` end-of-options in CLI + `install.sh` |
 
 ---
 

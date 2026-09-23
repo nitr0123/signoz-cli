@@ -742,7 +742,10 @@ def _latest_remote_tag(repo: str) -> str | None:
 
     try:
         proc = subprocess.run(
-            ["git", "ls-remote", "--tags", repo],
+            # "--" ends option parsing: the repo comes from env/user and
+            # must never be mistaken for a git flag (e.g. --upload-pack,
+            # which executes a local command).
+            ["git", "ls-remote", "--tags", "--", repo],
             capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
