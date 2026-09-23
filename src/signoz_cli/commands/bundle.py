@@ -373,6 +373,20 @@ def _diff_objects(old: Any, new: Any, fromfile: str, tofile: str) -> str:
     ))
 
 
+def _fetch_by_name(client, kind: str, name: str, profile: str) -> Any:
+    """Fetch the full object named *name* of a kind, or raise UsageError."""
+    for item in _list_items(client, kind):
+        if isinstance(item, dict) and _item_name(kind, item) == name:
+            full = _fetch_full(client, kind, item)
+            if full is None:
+                raise click.UsageError(
+                    f"Could not fetch {kind} '{name}' "
+                    f"from profile '{profile}'.")
+            return full
+    raise click.UsageError(
+        f"No {kind} named '{name}' on profile '{profile}'.")
+
+
 def _iter_bundle_docs(directory: str, kind: str):
     """Yield (filename, parsed doc) for a bundle kind directory.
 

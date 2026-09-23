@@ -233,6 +233,7 @@ signoz dashboards update UUID dashboard.json  # full replace
 signoz dashboards patch UUID patch.json       # JSON-Patch array
 signoz dashboards delete UUID
 signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
+signoz dashboards diff-remote --name D --from-profile prod --to-profile staging
 signoz alerts lint ./rules/*.json
 ```
 

@@ -986,3 +986,99 @@ class TestChannelsTest:
         result = runner.invoke(cli, ["channels", "test", "missing"])
         assert result.exit_code == 1
         assert "404" in result.output
+
+
+class TestDiffRemote:
+    def _fakes(self, monkeypatch, dash_a, dash_b):
+        import signoz_cli.commands.alerts as _al
+        import signoz_cli.commands.dashboards as _db
+
+        def _by_id(items):
+            return {d["id"]: d for d in items}
+
+        class Fake:
+            def __init__(self, store):
+                self._store = _by_id(store)
+
+            def close(self):
+                pass
+
+            def list_dashboards_v2(self, **k):
+                return {"status": "ok",
+                        "data": {"dashboards": list(self._store.values())}}
+
+            def get_dashboard_v2(self, i):
+                return {"status": "ok", "data": self._store[i]}
+
+            def list_rules(self):
+                return {"status": "ok",
+                        "data": {"rules": list(self._store.values())}}
+
+            def get_alert(self, i):
+                return {"status": "ok", "data": self._store[i]}
+
+        stores = {"prod": dash_a, "staging": dash_b}
+
+        def _client(endpoint, token, profile):
+            return Fake(stores[profile])
+
+        monkeypatch.setattr(_db, "_get_client", _client)
+        monkeypatch.setattr(_al, "_get_client", _client)
+
+    def test_dashboards_no_changes(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        doc = {"id": "d1", "name": "D",
+               "spec": {"variables": [], "panels": {}}}
+        self._fakes(monkeypatch, [doc], [dict(doc)])
+        result = runner.invoke(cli, ["dashboards", "diff-remote",
+                                     "--name", "D", "--from-profile", "prod",
+                                     "--to-profile", "staging"])
+        assert result.exit_code == 0, result.output
+        assert "no changes" in result.output
+
+    def test_dashboards_shows_delta(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        base = {"id": "d1", "name": "D",
+                "spec": {"variables": [], "panels": {}}}
+        other = {"id": "d9", "name": "D",
+                 "spec": {"variables": [{"name": "v"}], "panels": {}}}
+        self._fakes(monkeypatch, [base], [other])
+        result = runner.invoke(cli, ["dashboards", "diff-remote",
+                                     "--name", "D", "--from-profile", "prod",
+                                     "--to-profile", "staging"])
+        assert result.exit_code == 0, result.output
+        assert "prod:D" in result.output and "staging:D" in result.output
+
+    def test_missing_side_fails_clean(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        self._fakes(monkeypatch, [], [{"id": "d9", "name": "D"}])
+        result = runner.invoke(cli, ["dashboards", "diff-remote",
+                                     "--name", "D", "--from-profile", "prod",
+                                     "--to-profile", "staging"])
+        assert result.exit_code == 2
+        assert "prod" in result.output
+
+    def test_same_profile_refused(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        self._fakes(monkeypatch, [], [])
+        result = runner.invoke(cli, ["alerts", "diff-remote",
+                                     "--name", "R", "--from-profile", "p",
+                                     "--to-profile", "p"])
+        assert result.exit_code == 2
+        assert "differ" in result.output
+
+    def test_alerts_delta(self, runner, monkeypatch):
+        from signoz_cli.main import cli
+
+        self._fakes(monkeypatch,
+                    [{"id": "r1", "alert": "R", "expr": "a"}],
+                    [{"id": "r2", "alert": "R", "expr": "b"}])
+        result = runner.invoke(cli, ["alerts", "diff-remote",
+                                     "--name", "R", "--from-profile", "prod",
+                                     "--to-profile", "staging"])
+        assert result.exit_code == 0, result.output
+        assert '"a"' in result.output and '"b"' in result.output
