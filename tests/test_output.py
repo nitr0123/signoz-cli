@@ -238,6 +238,29 @@ class TestCsv:
         assert out.strip() == ""
 
 
+class TestCsvInjection:
+    def test_formula_cells_neutralized(self):
+        import csv as _csv
+        import io as _io
+
+        originals = ["=2+5", '=HYPERLINK("http://evil","c")',
+                     "+cmd|'/c calc'!A0", "@SUM(1+1)", "-2+3", "\t=1+1"]
+        rows = [{"v": v} for v in originals]
+        back = list(_csv.DictReader(_io.StringIO(_to_csv(rows))))
+        # Each hostile cell round-trips as quote-prefixed text: a
+        # spreadsheet treats it as a literal, never a formula.
+        assert [r["v"] for r in back] == ["'" + v for v in originals]
+
+    def test_numerics_and_plain_strings_untouched(self):
+        import csv as _csv
+        import io as _io
+
+        rows = [{"v": 42}, {"v": -5}, {"v": 3.14}, {"v": "normal"},
+                {"v": None}]
+        back = list(_csv.DictReader(_io.StringIO(_to_csv(rows))))
+        assert [r["v"] for r in back] == ["42", "-5", "3.14", "normal", ""]
+
+
 class TestCustomColumns:
     def test_custom_columns_renames_keys(self, capsys):
         data = [{"service.name": "svc-a", "name": "op1", "extra": "x"}]
