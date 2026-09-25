@@ -34,23 +34,22 @@ from signoz_cli.timeutil import resolve_timestamps
 _QUERIES_LIMIT = 100
 _NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,80}\Z")
 _KINDS = ("promql", "sql", "builder")
-# Text query files share the JSON intake cap: a multi-GB file is a
-# mistake (or hostile), never a query.
-_TEXT_CAP_BYTES = 32 * 1024 * 1024
 
 
 def _read_text_capped(path: str) -> str:
-    """Read a text file with a size cap (see _MAX_JSON_BYTES rationale)."""
+    """Read a text file with a size cap (shared intake bound)."""
     import os as _os
+
+    from signoz_cli.commands.common import _MAX_JSON_BYTES
 
     try:
         size = _os.path.getsize(path)
     except OSError as ex:
         raise click.UsageError(f"Cannot read {path}: {ex}") from None
-    if size > _TEXT_CAP_BYTES:
+    if size > _MAX_JSON_BYTES:
         raise click.UsageError(
             f"Refusing to read {path} ({size} bytes > "
-            f"{_TEXT_CAP_BYTES // (1024 * 1024)}MiB cap)."
+            f"{_MAX_JSON_BYTES // (1024 * 1024)}MiB cap)."
         )
     with open(path, encoding="utf-8") as fh:
         return fh.read()

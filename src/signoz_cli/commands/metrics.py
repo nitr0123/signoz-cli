@@ -7,18 +7,17 @@ from typing import Any
 import click
 
 from signoz_cli.commands.common import (
-    _apply_anomalies,
     _common_options,
     _extract_attribute_keys,
+    _finish_time_series,
     _flatten_field_keys,
     _flatten_field_values,
     _get_client,
     _handle_error,
-    _join_compare,
-    _maybe_emit_chart,
     _pagination_meta,
     _profile_time_range,
     _time_options,
+    _time_series_options,
     _unwrap_time_series,
     _warn_v5,
     cli,
@@ -164,17 +163,7 @@ def _resolve_metric_temporality(
 @click.option("--filter", "filter_expr", default="", help="Filter expression.")
 @click.option("--step", type=int, default=60, show_default=True,
               help="Step interval in seconds.")
-@click.option("--chart", is_flag=True,
-              help="Render time series as ASCII sparklines.")
-@click.option("--compare", default=None,
-              help="Compare against the window shifted back by this range "
-                   "(e.g. --compare 7d adds previous/change_pct columns).")
-@click.option("--anomalies", is_flag=True,
-              help="Show only z-score outlier points.")
-@click.option("--anomaly-window", type=int, default=10, show_default=True,
-              help="Trailing points per outlier baseline.")
-@click.option("--anomaly-threshold", type=float, default=3.0, show_default=True,
-              help="Minimum |z-score| to flag.")
+@_time_series_options
 @_time_options(default_range="1h")
 def metrics_query(
     endpoint: str | None,
@@ -232,19 +221,10 @@ def metrics_query(
         rows = _unwrap_time_series(resp)
         if not rows:
             _warn_empty_metrics(metric_name)
-        table_keys = ["series", "timestamp", "value"]
-        if compare:
-            from signoz_cli.timeutil import parse_time_range
 
-            try:
-                delta = parse_time_range(compare)
-            except ValueError:
-                raise click.UsageError(
-                    f"Invalid --compare '{compare}'. "
-                    "Use formats like '24h', '7d'."
-                ) from None
+        def _refetch(s2: int, e2: int) -> Any:
             payload2 = build_metrics_query_payload(
-                s - delta, e - delta, metric_name,
+                s2, e2, metric_name,
                 temporality=temporality,
                 time_aggregation=time_aggregation,
                 space_aggregation=space_aggregation,
@@ -252,15 +232,13 @@ def metrics_query(
                 filter_expression=filter_expr,
                 step_interval=step,
             )
-            rows = _join_compare(rows, _unwrap_time_series(
-                client.query_builder_v5(payload2)))
-            table_keys = ["series", "timestamp", "value", "previous", "change_pct"]
-        rows, anomaly_keys = _apply_anomalies(
-            rows, anomalies, anomaly_window, anomaly_threshold)
-        table_keys = table_keys + anomaly_keys
-        if _maybe_emit_chart(rows, fmt, chart):
-            return
-        emit(rows, fmt, table_keys=table_keys)
+            return _unwrap_time_series(client.query_builder_v5(payload2))
+
+        _finish_time_series(
+            rows, fmt, s, e, chart=chart, compare=compare,
+            anomalies=anomalies, anomaly_window=anomaly_window,
+            anomaly_threshold=anomaly_threshold, refetch=_refetch,
+        )
     except Exception as ex:
         _handle_error(ex)
 

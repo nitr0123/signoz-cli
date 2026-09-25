@@ -25,6 +25,7 @@ from signoz_cli.config import (
     select_profile_name,
 )
 from signoz_cli.output import (
+    emit,
     set_custom_columns,
     set_field_selector,
     set_jsonpath,
@@ -1349,6 +1350,77 @@ def _apply_anomalies(
     if not isinstance(rows, list):
         raise click.UsageError("--anomalies needs tabular time-series rows.")
     return _detect_anomalies(rows, window, threshold), ["zscore"]
+
+
+def _time_series_options(f):
+    """Decorate a time-series command with --chart/--compare/--anomalies.
+
+    Single point of definition so output flags stay identical across
+    `metrics query`, `promql` (and any future time-series command)
+    instead of being copy-pasted per command.
+    """
+    f = click.option(
+        "--chart", is_flag=True,
+        help="Render time series as ASCII sparklines.",
+    )(f)
+    f = click.option(
+        "--compare", default=None,
+        help="Compare against the window shifted back by this range "
+             "(e.g. --compare 7d adds previous/change_pct columns).",
+    )(f)
+    f = click.option(
+        "--anomalies", is_flag=True,
+        help="Show only z-score outlier points.",
+    )(f)
+    f = click.option(
+        "--anomaly-window", type=int, default=10, show_default=True,
+        help="Trailing points per outlier baseline.",
+    )(f)
+    f = click.option(
+        "--anomaly-threshold", type=float, default=3.0, show_default=True,
+        help="Minimum |z-score| to flag.",
+    )(f)
+    return f
+
+
+def _finish_time_series(
+    rows: Any,
+    fmt: str,
+    s: int,
+    e: int,
+    *,
+    chart: bool,
+    compare: str | None,
+    anomalies: bool,
+    anomaly_window: int,
+    anomaly_threshold: float,
+    refetch: Any,
+) -> None:
+    """Apply compare/anomalies/chart/emit in the canonical order.
+
+    ``refetch(s2, e2)`` re-runs the same query over the shifted window;
+    each command supplies its own (payload shapes differ), everything
+    else is shared.
+    """
+    from signoz_cli.timeutil import parse_time_range
+
+    table_keys = ["series", "timestamp", "value"]
+    if compare:
+        try:
+            delta = parse_time_range(compare)
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid --compare '{compare}'. "
+                "Use formats like '24h', '7d'."
+            ) from None
+        rows = _join_compare(rows, refetch(s - delta, e - delta))
+        table_keys = ["series", "timestamp", "value", "previous", "change_pct"]
+    rows, anomaly_keys = _apply_anomalies(
+        rows, anomalies, anomaly_window, anomaly_threshold)
+    table_keys = table_keys + anomaly_keys
+    if _maybe_emit_chart(rows, fmt, chart):
+        return
+    emit(rows, fmt, table_keys=table_keys)
 
 
 def _detect_anomalies(
