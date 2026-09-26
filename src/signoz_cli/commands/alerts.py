@@ -5,7 +5,6 @@ from __future__ import annotations
 import click
 
 from signoz_cli.client import SigNozApiError
-from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
     _MAX_PAGES,
@@ -22,6 +21,7 @@ from signoz_cli.commands.common import (
     _unwrap_history_timeline,
     cli,
 )
+from signoz_cli.inventory import _diff_objects
 from signoz_cli.output import _safe_plain, emit
 from signoz_cli.timeutil import resolve_timestamps
 
@@ -554,7 +554,7 @@ def alerts_diff_remote(
     identical. The ambient --profile/--endpoint is ignored: both sides
     are explicit so the direction is never ambiguous.
     """
-    from signoz_cli.commands.bundle import _fetch_by_name
+    from signoz_cli.inventory import _fetch_by_name
     from signoz_cli.output import _safe_plain
 
     if from_profile == to_profile:

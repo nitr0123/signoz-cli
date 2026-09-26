@@ -24,6 +24,24 @@ from signoz_cli.config import (
     load_config,
     select_profile_name,
 )
+from signoz_cli.history import (
+    _QUERY_HISTORY_COMMANDS as _QUERY_HISTORY_COMMANDS,
+)
+from signoz_cli.history import (
+    _QUERY_HISTORY_LIMIT as _QUERY_HISTORY_LIMIT,
+)
+from signoz_cli.history import (
+    _has_url_userinfo as _has_url_userinfo,
+)
+from signoz_cli.history import (
+    _history_path as _history_path,
+)
+from signoz_cli.history import (
+    _read_history as _read_history,
+)
+from signoz_cli.history import (
+    _record_history as _record_history,
+)
 from signoz_cli.output import (
     emit,
     set_custom_columns,
@@ -208,31 +226,6 @@ def _mask_token(token: str | None) -> str:
     # Short token: still set, but too short to show a prefix/suffix safely.
     return "***"
 
-
-def _has_url_userinfo(text: str) -> bool:
-    """Whether *text* looks like a URL embedding credentials (user:pass@host).
-
-    Covers both full URLs (``https://bob:secret@host``) and bare
-    ``bob:secret@host:port`` forms. Used to keep secrets out of history
-    and error output.
-    """
-    if "@" not in text or " " in text:
-        return False
-    try:
-        from urllib.parse import urlsplit as _urlsplit
-
-        if "://" in text:
-            # Full URL: even a bare username is credential material
-            # (https://bob@host performs basic auth as bob).
-            parts = _urlsplit(text)
-            return bool(parts.username or parts.password)
-        # Scheme-less text: only user:PASS@host counts. A bare
-        # user@host (e.g. an email inside a PromQL/SQL filter) is not
-        # a secret and must not suppress history recording.
-        parts = _urlsplit(f"//{text}")
-        return bool(parts.password)
-    except ValueError:
-        return False
 
 
 def _redact_userinfo(text: str) -> str:
@@ -834,74 +827,10 @@ def maybe_notify_update() -> None:
         )
 
 
-_QUERY_HISTORY_COMMANDS = {"logs", "traces", "metrics", "query", "promql", "sql"}
-_QUERY_HISTORY_LIMIT = 100
-
 # Upper bound for any JSON file/stdin intake (query payloads, rule and
 # dashboard definitions, bundle items). Real payloads are KBs; anything
 # near this is a mistake or a hostile file.
 _MAX_JSON_BYTES = 32 * 1024 * 1024
-
-
-def _history_path():
-    """History file lives next to the config (isolated in tests via CONFIG_DIR)."""
-    from pathlib import Path
-
-    return Path(CONFIG_DIR) / "history.json"
-
-
-def _read_history() -> list[dict[str, Any]]:
-    """Read recorded query invocations (newest last); never raises."""
-    try:
-        data = json.loads(_history_path().read_text())
-    except (OSError, ValueError):
-        return []
-    return data if isinstance(data, list) else []
-
-
-def _record_history(args: list[str]) -> None:
-    """Append a query invocation to the local history (best-effort).
-
-    Only the read/query roots are recorded, and never --help runs.
-    Invocations carrying `--token` are never recorded: persisting raw
-    secrets to disk (and echoing them in `history`) would leak them.
-    The same applies to endpoint URLs embedding userinfo credentials.
-    Must never break the invoked command.
-    """
-    try:
-        if not args or args[0] not in _QUERY_HISTORY_COMMANDS:
-            return
-        if "-h" in args or "--help" in args:
-            return
-        # Never persist raw secrets: --token in either space or equals
-        # form disqualifies the whole invocation from recording.
-        if any(a == "--token" or a.startswith("--token=") for a in args):
-            return
-        # Endpoint URLs with embedded credentials (https://user:pass@host)
-        # are secrets too -- in any flag form.
-        if any(_has_url_userinfo(a) for a in args):
-            return
-        import datetime
-
-        entries = _read_history()
-        entries.append({
-            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "argv": list(args),
-        })
-        path = _history_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Private from birth (see config._write_private): history once
-        # held raw --token values in older releases.
-        from signoz_cli.config import _ensure_config_dir, _write_private
-
-        _ensure_config_dir()
-        _write_private(path, json.dumps(entries[-_QUERY_HISTORY_LIMIT:], indent=2))
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-    except Exception:
-        pass
 
 
 def _unwrap_time_series(data: Any) -> list[dict[str, Any]]:

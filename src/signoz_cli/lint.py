@@ -10,14 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-VOLATILE_KEYS = (
-    "id",
-    "createdAt",
-    "updatedAt",
-    "createdBy",
-    "updatedBy",
-    "orgId",
-)
+from signoz_cli.inventory import VOLATILE_KEYS
 
 # Top-level dashboard fields the create/update endpoints reject or reset
 # (mirrors bundle._normalize_dashboard).

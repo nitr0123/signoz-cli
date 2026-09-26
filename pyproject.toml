@@ -55,6 +55,10 @@ select = ["E4", "E7", "E9", "F", "I", "B", "UP", "BLE"]
 # CLI commands intentionally funnel all errors through _handle_error
 "src/signoz_cli/main.py" = ["BLE001"]
 "src/signoz_cli/commands/*.py" = ["BLE001"]
+# inventory fetch helpers warn-and-skip on any transport failure by design
+"src/signoz_cli/inventory.py" = ["BLE001"]
+# history recording must never break the invoked command by design
+"src/signoz_cli/history.py" = ["BLE001"]
 
 [tool.mypy]
 python_version = "3.10"

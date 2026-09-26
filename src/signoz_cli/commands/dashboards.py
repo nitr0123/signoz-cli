@@ -6,7 +6,6 @@ from typing import Any
 
 import click
 
-from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _MAX_PAGES,
     _common_options,
@@ -17,6 +16,7 @@ from signoz_cli.commands.common import (
     _read_json,
     cli,
 )
+from signoz_cli.inventory import _diff_objects
 from signoz_cli.output import emit
 
 
@@ -277,7 +277,7 @@ def dashboards_diff_remote(
     identical. The ambient --profile/--endpoint is ignored: both sides
     are explicit so the direction is never ambiguous.
     """
-    from signoz_cli.commands.bundle import _fetch_by_name
+    from signoz_cli.inventory import _fetch_by_name
     from signoz_cli.output import _safe_plain
 
     if from_profile == to_profile:
