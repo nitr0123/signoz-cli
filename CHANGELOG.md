@@ -27,6 +27,16 @@
 
 ### Added
 
+- SigNoz 0.140+ AI observability: `ai fields`, `ai field-values`,
+  `ai pricing-rules list/get/create/delete`, `ai unmapped-models`
+  (fields/pricing verified live on 0.138; pricing also returns empty
+  cleanly where unconfigured).
+- Notification channels **v2** (SigNoz 0.141+): `channels
+  list/get/create/update/delete --api v2` (paginated, searchable,
+  kind-filtered) plus `channels repair ID [--apply]` (dry-run by
+  default). v1 remains the default and works on all servers.
+- Dashboard `lint` no longer flags 0.142+ text/static panels for
+  missing `queries`.
 - PyPI registry publishing: every release now also lands in the
   Forgejo package registry (`signoz update` detects index installs;
   `pipx install signoz-cli==X` with `PIP_INDEX_URL` set).

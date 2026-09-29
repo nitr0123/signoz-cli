@@ -63,6 +63,16 @@ def configure(
     """
     cfg = load_config()
     profiles = get_profiles(cfg)
+    # Paste hygiene: strip surrounding whitespace, then reject anything
+    # left inside the URL (a pasted newline/space breaks every later
+    # request); tokens are opaque, so strip only the edges there.
+    endpoint = endpoint.strip()
+    if any(c.isspace() or ord(c) < 0x20 for c in endpoint):
+        raise click.UsageError(
+            f"Invalid --endpoint {endpoint!r}: must not contain "
+            "whitespace or control characters."
+        )
+    token = token.strip()
     _reject_endpoint_userinfo(endpoint, source="--endpoint")
     profiles[profile_name] = {
         "endpoint": endpoint.rstrip("/"),

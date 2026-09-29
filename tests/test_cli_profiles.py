@@ -484,3 +484,45 @@ class TestNoColor:
         result = runner.invoke(cli, ["logs", "search", "--no-color", "-p", "d"])
         assert result.exit_code == 0, result.output
         assert "\x1b[" not in result.output
+
+
+class TestConfigureHygiene:
+    def _iso(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("signoz_cli.config.CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(
+            "signoz_cli.config.CONFIG_FILE", tmp_path / "config.json")
+
+    def test_strips_paste_whitespace(self, runner, monkeypatch, tmp_path):
+        import json as _json
+
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        result = runner.invoke(cli, [
+            "configure", "-p", "x", "--endpoint", "https://h:8080/ ",
+            "--token", "  tok123  "])
+        assert result.exit_code == 0, result.output
+        saved = _json.loads((tmp_path / "config.json").read_text())
+        assert saved["profiles"]["x"]["endpoint"] == "https://h:8080"
+        assert saved["profiles"]["x"]["token"] == "tok123"
+
+    def test_rejects_endpoint_with_interior_space(self, runner, monkeypatch,
+                                                  tmp_path):
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        result = runner.invoke(cli, [
+            "configure", "-p", "x", "--endpoint", "https://ho st:8080",
+            "--token", "t"])
+        assert result.exit_code == 2
+        assert "whitespace" in result.output
+
+    def test_rejects_endpoint_with_newline(self, runner, monkeypatch,
+                                            tmp_path):
+        from signoz_cli.main import cli
+
+        self._iso(monkeypatch, tmp_path)
+        result = runner.invoke(cli, [
+            "configure", "-p", "x", "--endpoint", "https://h:8080\nX",
+            "--token", "t"])
+        assert result.exit_code == 2

@@ -11,6 +11,10 @@ Built for the current SigNoz API surface:
 - Dashboards **v2** (`/api/v2/dashboards`, Perses-compatible schema — the v1 dashboard APIs were retired in 0.135)
 - Alert history **v2** (`/api/v2/rules/{id}/history/*` — the v1 history endpoints were deprecated in 0.136)
 - Service-account API keys (`SIGNOZ-API-KEY` header)
+- Notification channels **v2** (`/api/v2/notification_channels`, opt-in
+  via `channels --api v2` — needs SigNoz 0.141+)
+- AI observability (`ai` commands: LLM span fields, model pricing rules —
+  needs SigNoz 0.140+)
 
 ## Installation
 
@@ -233,6 +237,7 @@ signoz dashboards update UUID dashboard.json  # full replace
 signoz dashboards patch UUID patch.json       # JSON-Patch array
 signoz dashboards delete UUID
 signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
+signoz dashboards diff-remote --name D --from-profile prod --to-profile staging
 signoz alerts lint ./rules/*.json
 ```
 
@@ -289,6 +294,8 @@ signoz metrics query e2e.requests.total --time-aggregation sum --compare 7d
 signoz logs tail --service payment-svc
 signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test
 signoz channels list                 # admin only
+signoz channels list --api v2 --kind slack  # v2 API (SigNoz 0.141+)
+signoz channels repair CH_ID          # diagnose a v2-unreadable channel
 signoz channels test ops             # fire a test notification by channel name
 signoz service-accounts list         # admin only
 signoz views list                    # saved views
@@ -298,6 +305,9 @@ signoz apply ./backup -p staging --dry-run   # declarative sync preview
 signoz apply ./backup -p staging --prune --yes  # sync + delete unmanaged
 signoz logs search --all             # auto-paginate everything
 signoz logs search -f csv -o out.csv # CSV to file
+signoz ai fields --search gen_ai      # LLM span attributes
+signoz ai pricing-rules list          # per-model LLM pricing
+signoz ai unmapped-models             # models without pricing
 signoz --timeout 30 --insecure auth verify   # TLS/proxy options; retries on 429/5xx are automatic
 eval "$(_SIGNOZ_COMPLETE=bash_source signoz)"  # bash completion (zsh/fish variants too)
 ```

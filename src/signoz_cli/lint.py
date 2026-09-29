@@ -10,14 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-VOLATILE_KEYS = (
-    "id",
-    "createdAt",
-    "updatedAt",
-    "createdBy",
-    "updatedBy",
-    "orgId",
-)
+from signoz_cli.inventory import VOLATILE_KEYS
 
 # Top-level dashboard fields the create/update endpoints reject or reset
 # (mirrors bundle._normalize_dashboard).
@@ -26,6 +19,27 @@ READONLY_DASHBOARD_KEYS = ("locked", "image", "source")
 
 def _finding(level: str, check: str, message: str) -> dict[str, str]:
     return {"level": level, "check": check, "message": message}
+
+
+def _is_static_panel(panel: dict[str, Any]) -> bool:
+    """Whether a panel carries static content instead of queries.
+
+    Text panels (SigNoz 0.142+) embed ``text``/``mode`` content, either
+    inline or under a ``spec``/``plugin`` mapping keyed by panel kind
+    (e.g. ``signoz/TextPanel``). Flagging those for missing ``queries``
+    would be a false positive.
+    """
+    if "text" in panel:
+        return True
+    for key in ("plugin", "spec", "options"):
+        nested = panel.get(key)
+        if isinstance(nested, dict):
+            kind = nested.get("kind", "")
+            if isinstance(kind, str) and "TextPanel" in kind:
+                return True
+            if "text" in nested:
+                return True
+    return False
 
 
 def lint_dashboard(doc: Any) -> list[dict[str, str]]:
@@ -66,6 +80,9 @@ def lint_dashboard(doc: Any) -> list[dict[str, str]]:
                 findings.append(_finding(
                     "warning", "panel-shape",
                     f"Panel {panel_id!r} should be an object."))
+                continue
+            if _is_static_panel(panel):
+                # Text/static panels (0.142+) carry content, not queries.
                 continue
             if "queries" not in panel:
                 findings.append(_finding(

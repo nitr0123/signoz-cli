@@ -403,6 +403,110 @@ class SigNozClient:
         return self._parse(resp, allow_empty=True)
 
     # ------------------------------------------------------------------
+    # Notification channels v2 (SigNoz 0.141+: paginated list, repair)
+    # ------------------------------------------------------------------
+
+    def list_channels_v2(
+        self,
+        limit: int | None = None,
+        offset: int | None = None,
+        query: str | None = None,
+        kind: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+    ) -> Any:
+        """GET /api/v2/notification_channels (paginated, searchable).
+
+        Entries carry identity and kind but not configuration; fetch by
+        ID for the full document.
+        """
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if offset is not None:
+            params["offset"] = str(offset)
+        if query:
+            params["query"] = query
+        if kind:
+            params["kind"] = kind
+        if sort:
+            params["sort"] = sort
+        if order:
+            params["order"] = order
+        return self._get("/api/v2/notification_channels", params=params)
+
+    def get_channel_v2(self, channel_id: str) -> Any:
+        return self._get(f"/api/v2/notification_channels/{channel_id}")
+
+    def create_channel_v2(self, channel: dict[str, Any]) -> Any:
+        return self._post("/api/v2/notification_channels",
+                          json_body=channel, idempotent=False)
+
+    def update_channel_v2(self, channel_id: str, channel: dict[str, Any]) -> Any:
+        return self._put(f"/api/v2/notification_channels/{channel_id}",
+                         json_body=channel)
+
+    def delete_channel_v2(self, channel_id: str) -> Any:
+        resp = self._request(
+            "DELETE", f"/api/v2/notification_channels/{channel_id}")
+        return self._parse(resp, allow_empty=True)
+
+    def repair_channel_v2(self, channel_id: str, apply: bool = False) -> Any:
+        """Diagnose (and optionally fix) a channel the v2 API cannot read.
+
+        Defaults to dry-run: the server only reports what it would do
+        unless ``apply`` is true.
+        """
+        return self._parse(
+            self._request(
+                "POST",
+                f"/api/v2/notification_channels/{channel_id}/repair",
+                params={"apply": "true" if apply else "false"},
+                json_body={"apply": apply},
+                idempotent=False,
+            )
+        )
+
+    def test_channel_v2(self, channel: dict[str, Any]) -> Any:
+        """Test a full v2 channel document (returns 204 on success)."""
+        resp = self._request(
+            "POST", "/api/v2/notification_channels/test", json_body=channel)
+        return self._parse(resp, allow_empty=True)
+
+    # ------------------------------------------------------------------
+    # AI observability (SigNoz 0.140+: LLM spans, model pricing)
+    # ------------------------------------------------------------------
+
+    def get_ai_fields_keys(self, search_text: str = "") -> Any:
+        return self._get(
+            "/api/v1/ai_observability/fields/keys",
+            params={"searchText": search_text} if search_text else None,
+        )
+
+    def get_ai_field_values(self, field_name: str, search_text: str = "") -> Any:
+        params: dict[str, str] = {"name": field_name}
+        if search_text:
+            params["searchText"] = search_text
+        return self._get("/api/v1/ai_observability/fields/values", params=params)
+
+    def list_llm_pricing_rules(self) -> Any:
+        return self._get("/api/v1/llm_pricing_rules")
+
+    def create_llm_pricing_rule(self, rule: dict[str, Any]) -> Any:
+        return self._post("/api/v1/llm_pricing_rules",
+                          json_body=rule, idempotent=False)
+
+    def get_llm_pricing_rule(self, rule_id: str) -> Any:
+        return self._get(f"/api/v1/llm_pricing_rules/{rule_id}")
+
+    def delete_llm_pricing_rule(self, rule_id: str) -> Any:
+        resp = self._request("DELETE", f"/api/v1/llm_pricing_rules/{rule_id}")
+        return self._parse(resp, allow_empty=True)
+
+    def list_unmapped_llm_models(self) -> Any:
+        return self._get("/api/v1/llm_pricing_rules/unmapped_models")
+
+    # ------------------------------------------------------------------
     # Saved views (0.137+ spec-based API)
     # ------------------------------------------------------------------
 

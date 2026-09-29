@@ -10,14 +10,13 @@ from signoz_cli.commands.common import (
     _get_client,
     _handle_error,
     _has_url_userinfo,
-    _history_path,
     _is_supported_server,
     _is_truthy,
-    _read_history,
     _redact_userinfo,
     _selected_profile_name,
     cli,
 )
+from signoz_cli.history import _history_path, _read_history
 from signoz_cli.output import emit
 
 

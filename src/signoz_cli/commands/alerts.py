@@ -5,7 +5,6 @@ from __future__ import annotations
 import click
 
 from signoz_cli.client import SigNozApiError
-from signoz_cli.commands.bundle import _diff_objects
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
     _MAX_PAGES,
@@ -22,6 +21,7 @@ from signoz_cli.commands.common import (
     _unwrap_history_timeline,
     cli,
 )
+from signoz_cli.inventory import _diff_objects
 from signoz_cli.output import _safe_plain, emit
 from signoz_cli.timeutil import resolve_timestamps
 
@@ -537,3 +537,42 @@ def alerts_lint(files: tuple[str, ...], fmt: str, strict: bool) -> None:
     from signoz_cli.lint import lint_rule
 
     _lint_files(files, fmt, strict, lint_rule)
+
+
+@alerts.command("diff-remote")
+@_common_options
+@click.option("--name", required=True, help="Rule name on both instances.")
+@click.option("--from-profile", required=True, help="Source profile.")
+@click.option("--to-profile", required=True, help="Target profile.")
+def alerts_diff_remote(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, name: str, from_profile: str, to_profile: str,
+) -> None:
+    """Diff an alert rule between two instances by name (no files).
+
+    Server-managed keys are ignored. Prints "(no changes)" when
+    identical. The ambient --profile/--endpoint is ignored: both sides
+    are explicit so the direction is never ambiguous.
+    """
+    from signoz_cli.inventory import _fetch_by_name
+    from signoz_cli.output import _safe_plain
+
+    if from_profile == to_profile:
+        raise click.UsageError("--from-profile and --to-profile differ.")
+    try:
+        old = _fetch_by_name(
+            _get_client(None, None, from_profile), "alerts",
+            name, from_profile)
+        new = _fetch_by_name(
+            _get_client(None, None, to_profile), "alerts",
+            name, to_profile)
+        delta = _diff_objects(
+            old, new,
+            f"{from_profile}:{name}", f"{to_profile}:{name}",
+        )
+        if delta:
+            click.echo(_safe_plain(delta))
+        else:
+            click.echo("(no changes)")
+    except Exception as e:
+        _handle_error(e)

@@ -7,6 +7,7 @@ from __future__ import annotations
 # signoz_cli.commands.common).
 from signoz_cli.commands import (  # noqa: F401
     accounts,
+    ai,
     alerts,
     auth,
     bundle,
