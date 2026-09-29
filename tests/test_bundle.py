@@ -117,6 +117,61 @@ class _BundleFake:
             raise SigNozApiError(404, "not_found: no integrations found")
         return {"status": "success"}
 
+    def list_channels_v2(self, limit=None, offset=None, query=None,
+                         kind=None, sort=None, order=None):
+        self.calls.setdefault("v2kwargs", []).append(
+            {"limit": limit, "offset": offset, "query": query,
+             "kind": kind, "sort": sort, "order": order})
+        return {"status": "success",
+                "data": {"channels": [{"id": "ch2", "name": "Ch2",
+                                       "displayName": "Ch2", "kind": "slack"}],
+                         "total": 1}}
+
+    def get_channel_v2(self, channel_id):
+        return {"status": "success",
+                "data": {"id": channel_id, "name": "Ch2"}}
+
+    def create_channel_v2(self, doc):
+        self.calls["create"].append(("channels-v2", doc))
+        return {"status": "success", "data": {"id": "ch10"}}
+
+    def update_channel_v2(self, channel_id, doc):
+        self.calls["update"].append(("channels-v2", channel_id, doc))
+        return {"status": "success"}
+
+    def delete_channel_v2(self, channel_id):
+        self.calls["delete"].append(("channels-v2", channel_id))
+        return {"status": "success"}
+
+    def repair_channel_v2(self, channel_id, apply=False):
+        self.calls.setdefault("repair", []).append((channel_id, apply))
+        return {"status": "success",
+                "data": {"action": "none" if apply else "dry-run"}}
+
+    def get_ai_fields_keys(self, search_text=""):
+        return {"status": "success", "data": {"keys": ["gen_ai.model"]}}
+
+    def get_ai_field_values(self, field_name, search_text=""):
+        return {"status": "success",
+                "data": {"values": [{"value": "gpt-4o"}]}}
+
+    def list_llm_pricing_rules(self):
+        return {"status": "success", "data": [{"id": "pr1"}]}
+
+    def create_llm_pricing_rule(self, rule):
+        self.calls["create"].append(("pricing", rule))
+        return {"status": "success", "data": {"id": "pr9"}}
+
+    def get_llm_pricing_rule(self, rule_id):
+        return {"status": "success", "data": {"id": rule_id}}
+
+    def delete_llm_pricing_rule(self, rule_id):
+        self.calls["delete"].append(("pricing", rule_id))
+        return {"status": "success"}
+
+    def list_unmapped_llm_models(self):
+        return {"status": "success", "data": [{"model": "mystery-1"}]}
+
     def list_saved_views(self, source_page="logs"):
         return {"status": "success", "data": None}
 
@@ -329,6 +384,54 @@ class TestChannelsViewsCommands:
         result = runner.invoke(cli, ["channels", "create", str(pf), "--json"])
         assert result.exit_code == 0, result.output
         assert "ch9" in result.output
+
+    def test_channels_v2_list_and_filters(self, runner, fake):
+        import json as _json
+
+        result = runner.invoke(cli, ["channels", "list", "--api", "v2",
+                                     "--kind", "slack", "--limit", "5",
+                                     "--json"])
+        assert result.exit_code == 0, result.output
+        body = _json.loads(result.stdout)
+        assert body["data"]["channels"][0]["kind"] == "slack"
+        assert fake.calls["v2kwargs"][-1]["kind"] == "slack"
+        assert fake.calls["v2kwargs"][-1]["limit"] == 5
+
+    def test_channels_v2_crud(self, runner, fake, tmp_path):
+        import json as _json
+
+        result = runner.invoke(
+            cli, ["channels", "get", "ch2", "--api", "v2", "--json"])
+        assert result.exit_code == 0, result.output
+        assert _json.loads(result.stdout)["data"]["id"] == "ch2"
+        pf = tmp_path / "c2.json"
+        pf.write_text(_json.dumps({"name": "N", "displayName": "N",
+                                   "config": {}}))
+        result = runner.invoke(
+            cli, ["channels", "create", str(pf), "--api", "v2", "--json"])
+        assert result.exit_code == 0, result.output
+        assert ("channels-v2", {"name": "N", "displayName": "N",
+                                "config": {}}) in fake.calls["create"]
+        result = runner.invoke(
+            cli, ["channels", "update", "ch2", str(pf),
+                  "--api", "v2", "--json"])
+        assert result.exit_code == 0, result.output
+        assert ("channels-v2", "ch2", {"name": "N", "displayName": "N",
+                                       "config": {}}) in fake.calls["update"]
+        result = runner.invoke(
+            cli, ["channels", "delete", "ch2", "--api", "v2", "--yes",
+                  "--json"])
+        assert result.exit_code == 0, result.output
+        assert ("channels-v2", "ch2") in fake.calls["delete"]
+
+    def test_channels_repair_dry_run_then_apply(self, runner, fake):
+        result = runner.invoke(cli, ["channels", "repair", "ch2", "--json"])
+        assert result.exit_code == 0, result.output
+        assert fake.calls["repair"][-1] == ("ch2", False)
+        result = runner.invoke(
+            cli, ["channels", "repair", "ch2", "--apply", "--json"])
+        assert result.exit_code == 0, result.output
+        assert fake.calls["repair"][-1] == ("ch2", True)
 
     def test_views_list_null_normalized(self, runner, fake):
         import json as _json
@@ -841,6 +944,20 @@ class TestLint:
             "id": "abc", "locked": True})
         levels = {f["check"] for f in findings if f["level"] == "warning"}
         assert {"panels", "portability", "readonly-field"} <= levels
+
+    def test_text_panel_needs_no_queries(self, tmp_path):
+        from signoz_cli.lint import lint_dashboard
+
+        for panel in ({"text": "# hello", "mode": "markdown"},
+                      {"plugin": {"kind": "signoz/TextPanel",
+                                  "spec": {"text": "hi"}}},
+                      {"spec": {"text": "hi"}}):
+            findings = lint_dashboard({
+                "schemaVersion": "v6", "name": "D",
+                "spec": {"variables": [], "layouts": [],
+                         "panels": {"p1": panel}}})
+        assert not [f for f in findings if f["check"] == "panel-queries"]
+        assert not [f for f in findings if f["level"] == "error"]
 
     def test_rule_errors_and_warnings(self, tmp_path):
         from signoz_cli.lint import lint_rule

@@ -682,7 +682,9 @@ class SuggestGroup(click.Group):
 def cli(ctx: click.Context, root_profile: str | None) -> None:
     """SigNoz CLI -- query traces, logs, metrics, dashboards, alerts, and services.
 
-    Targets SigNoz v0.138+ APIs (Query Builder v5, Dashboards v2, Alert History v2).
+    Targets SigNoz v0.138+ APIs (Query Builder v5, Dashboards v2, Alert History v2),
+    with opt-in support for newer APIs: notification channels v2 (0.141+)
+    and AI observability / LLM pricing (0.140+).
 
     Use named profiles to work with multiple SigNoz instances:
 
