@@ -54,22 +54,32 @@ def _safe_name(name: str) -> str:
     help="Comma-separated kinds to export.",
 )
 @click.option("--yes", is_flag=True, help="Write without confirming.")
+@click.option("--encrypt", is_flag=True,
+              help="Encrypt the bundle into <directory>.enc for safe storage "
+                   "in git (passphrase via prompt or SIGNOZ_BUNDLE_PASSPHRASE).")
 def export_bundle(
     endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, directory: str, include: str, yes: bool,
+    encrypt: bool,
 ) -> None:
     """Export dashboards, alert rules, channels and views to a directory.
 
     Produces <dir>/manifest.json plus one JSON file per item, suitable
     for `signoz import` into another instance (dev -> prod migration).
+    With --encrypt, the directory is packed and encrypted into a single
+    <dir>.enc file instead (read back with `signoz import --decrypt`).
 
     \b
     Examples:
       signoz export ./backup -p prod
       signoz export ./dash-only --include dashboards
+      signoz export ./backup -p prod --encrypt
     """
     import os
+    import shutil
+    import tempfile
 
+    tmpdir: str | None = None
     try:
         kinds = [k.strip() for k in include.split(",") if k.strip()]
         for kind in kinds:
@@ -95,9 +105,15 @@ def export_bundle(
             "counts": {},
         }
         summary = []
+        workdir = directory
+        if encrypt:
+            # Export plaintext into a temp dir first; pack + encrypt at
+            # the end so a failure never leaves half-written output.
+            tmpdir = tempfile.mkdtemp(prefix="signoz-export-")
+            workdir = tmpdir
         for kind in kinds:
             items = _list_items(client, kind)
-            kind_dir = os.path.join(directory, kind)
+            kind_dir = os.path.join(workdir, kind)
             os.makedirs(kind_dir, exist_ok=True)
             saved = 0
             seen_names: set[str] = set()
@@ -122,17 +138,44 @@ def export_bundle(
                 saved += 1
             manifest["counts"][kind] = saved
             summary.append({"kind": kind, "exported": saved})
-        with open(os.path.join(directory, "manifest.json"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(workdir, "manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2)
             fh.write("\n")
+        if encrypt:
+            from signoz_cli.bundle_crypto import encrypt_files, read_passphrase
+
+            files: dict[str, str] = {}
+            for root, _dirs, fnames in os.walk(workdir):
+                relroot = os.path.relpath(root, workdir)
+                if relroot != ".":
+                    # Keep empty kind directories round-tripping: import
+                    # discovers kinds by subdirectory presence.
+                    files[relroot.replace(os.sep, "/") + "/"] = ""
+                for fname in sorted(fnames):
+                    fpath = os.path.join(root, fname)
+                    with open(fpath, encoding="utf-8") as fh:
+                        files[os.path.relpath(fpath, workdir)] = fh.read()
+            out_path = directory + ".enc"
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write(encrypt_files(
+                    files, read_passphrase(confirm=True)))
+            try:
+                os.chmod(out_path, 0o600)
+            except OSError:
+                pass
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            click.echo(f"Encrypted bundle written to {out_path}", err=True)
         emit(summary, fmt)
     except Exception as e:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
         _handle_error(e)
 
 
 @cli.command("import")
 @_common_options
-@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.argument("directory", type=click.Path(exists=True))
 @click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
 @click.option(
     "--on-conflict", type=click.Choice(["skip", "overwrite", "fail"]),
@@ -141,10 +184,14 @@ def export_bundle(
          "or fail. Views overwrite is delete + recreate (no update API).",
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--decrypt", is_flag=True,
+              help="Read DIRECTORY as an encrypted <name>.enc file made by "
+                   "`export --encrypt` (passphrase via prompt or "
+                   "SIGNOZ_BUNDLE_PASSPHRASE).")
 def import_bundle(
     endpoint: str | None, token: str | None, fmt: str,
     profile: str | None, directory: str, dry_run: bool,
-    on_conflict: str, yes: bool,
+    on_conflict: str, yes: bool, decrypt: bool,
 ) -> None:
     """Import a bundle directory created by `signoz export`.
 
@@ -155,10 +202,55 @@ def import_bundle(
     Examples:
       signoz import ./backup -p staging --dry-run
       signoz import ./backup -p prod --on-conflict overwrite --yes
+      signoz import ./backup.enc -p prod --decrypt --yes
     """
     import os
+    import shutil
+    import tempfile
 
+    tmpdir: str | None = None
     try:
+        if decrypt:
+            from signoz_cli.bundle_crypto import decrypt_files, read_passphrase
+
+            if not os.path.isfile(directory):
+                raise click.UsageError(
+                    f"With --decrypt, DIRECTORY must be an encrypted bundle "
+                    f"file, not {directory!r}.")
+            with open(directory, encoding="utf-8") as fh:
+                envelope_text = fh.read()
+            try:
+                files = decrypt_files(
+                    envelope_text, read_passphrase())
+            except ValueError as ex:
+                raise click.UsageError(str(ex)) from None
+            tmpdir = tempfile.mkdtemp(prefix="signoz-import-")
+            for relpath, content in files.items():
+                # Envelope paths are always relative forward-slash joins
+                # we wrote; reject anything escaping the temp dir.
+                # Keys ending in "/" are directory placeholders.
+                if relpath.endswith("/"):
+                    if relpath in ("./", "/"):
+                        raise click.UsageError(
+                            f"Encrypted bundle contains unsafe path {relpath!r}.")
+                    target = os.path.normpath(os.path.join(tmpdir, relpath))
+                    if target != tmpdir and not target.startswith(tmpdir + os.sep):
+                        raise click.UsageError(
+                            f"Encrypted bundle contains unsafe path {relpath!r}.")
+                    os.makedirs(target, exist_ok=True)
+                    continue
+                target = os.path.normpath(os.path.join(tmpdir, relpath))
+                if not target.startswith(tmpdir + os.sep):
+                    raise click.UsageError(
+                        f"Encrypted bundle contains unsafe path {relpath!r}.")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+            directory = tmpdir
+        if not decrypt and not os.path.isdir(directory):
+            raise click.UsageError(
+                f"{directory!r} is not a directory (pass --decrypt for "
+                "encrypted <name>.enc files).")
         client = _get_client(endpoint, token, profile)
         kinds = [
             k for k in ("channels", "views", "dashboards", "alerts")
@@ -210,6 +302,9 @@ def import_bundle(
         emit(report, fmt)
     except Exception as e:
         _handle_error(e)
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _normalize_dashboard(doc: dict[str, Any]) -> dict[str, Any]:

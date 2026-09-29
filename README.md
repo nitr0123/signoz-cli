@@ -271,6 +271,8 @@ signoz service-accounts list         # admin only
 signoz views list                    # saved views
 signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
 signoz export ./backup -p prod       # dashboards/rules/channels/views bundle
+signoz export ./backup -p prod --encrypt  # single .enc file, safe for git
+signoz import ./backup.enc -p staging --decrypt --yes
 signoz apply ./backup -p staging --dry-run   # declarative sync preview
 signoz apply ./backup -p staging --prune --yes  # sync + delete unmanaged
 signoz logs search --all             # auto-paginate everything

@@ -5,14 +5,14 @@ tests + docs; security-sensitive items get an adversarial pass first.
 
 ## Planned (ordered)
 
-- [ ] **Encrypted bundles** — `export --encrypt` / `import --decrypt` so
-  bundles can live in git safely. Needs a crypto dependency decision
-  (`cryptography` vs `age`); passphrase via prompt/env, never argv.
 - [ ] **Grafana dashboard import conversion** — translate Grafana JSON to
   the Perses-compatible v2 schema on import. Needs research into Grafana
   panel/query schema coverage.
 
 ## Shipped (v0.5.x series)
+
+- [x] Encrypted bundles (`export --encrypt` / `import --decrypt`,
+  Fernet + PBKDF2, passphrase via prompt/env)
 
 - [x] MCP server (34 tools, stdio, read-only default)
 - [x] ASCII charts (`--chart`), `watch` command
@@ -22,6 +22,7 @@ tests + docs; security-sensitive items get an adversarial pass first.
 - [x] `channels test`, saved queries, dashboards/alerts `lint`
 - [x] YAML via PyYAML, offline `history`/`rerun`
 - [x] Cross-instance `diff-remote` (dashboards + alerts)
+- [x] SigNoz 0.140–0.143: channels v2, `ai` group, lint text panels
 
 ## Security posture
 

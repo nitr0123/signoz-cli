@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Encrypted bundles: `export --encrypt` packs the bundle into a single
+  `<dir>.enc` file (Fernet + PBKDF2, passphrase via prompt or
+  `SIGNOZ_BUNDLE_PASSPHRASE`), readable with `import --decrypt` —
+  safe to commit to git.
+
 ### Changed
 
 - The project now lives on GitHub: https://github.com/nitr0123/signoz-cli.
