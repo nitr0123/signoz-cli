@@ -8,6 +8,9 @@
   `<dir>.enc` file (Fernet + PBKDF2, passphrase via prompt or
   `SIGNOZ_BUNDLE_PASSPHRASE`), readable with `import --decrypt` —
   safe to commit to git.
+- Grafana import: `dashboards convert grafana.json --out signoz.json`
+  (PromQL/SQL targets, text/interval variables; unsupported panels and
+  targets reported, never silently dropped; output passes `lint`).
 
 ### Changed
 

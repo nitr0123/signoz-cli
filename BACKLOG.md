@@ -13,6 +13,7 @@ tests + docs; security-sensitive items get an adversarial pass first.
 
 - [x] Encrypted bundles (`export --encrypt` / `import --decrypt`,
   Fernet + PBKDF2, passphrase via prompt/env)
+- [x] Grafana dashboard import conversion (`dashboards convert`)
 
 - [x] MCP server (34 tools, stdio, read-only default)
 - [x] ASCII charts (`--chart`), `watch` command
