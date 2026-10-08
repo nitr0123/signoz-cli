@@ -141,3 +141,45 @@ class TestNullTolerantExtract:
         rows = _extract_alerts(data)
         assert rows[0]["alertname"] == ""
         assert rows[0]["state"] == ""
+
+
+class TestTimeSeriesLabels:
+    """Series labels as SigNoz v0.138 sends them for a group-by."""
+
+    @staticmethod
+    def _resp(series, alias="__result_0"):
+        return {"status": "success", "data": {"type": "time_series", "data": {"results": [
+            {"queryName": "A", "aggregations": [{"index": 0, "alias": alias, "series": series}]}
+        ]}}}
+
+    def test_object_keys_give_readable_distinct_series(self):
+        from signoz_cli.commands.common import _unwrap_time_series
+
+        key = {"name": "host", "signal": "", "fieldContext": "", "fieldDataType": ""}
+        rows = _unwrap_time_series(self._resp([
+            {"labels": [{"key": key, "value": "web-1"}], "values": [{"timestamp": 1, "value": 1.0}]},
+            {"labels": [{"key": key, "value": "web-2"}], "values": [{"timestamp": 1, "value": 2.0}]},
+        ]))
+        assert [r["series"] for r in rows] == ["host=web-1", "host=web-2"]
+
+    def test_plain_string_keys_still_work(self):
+        from signoz_cli.commands.common import _unwrap_time_series
+
+        rows = _unwrap_time_series(self._resp(
+            [{"labels": [{"key": "svc", "value": "api"}], "values": [{"timestamp": 1, "value": 3}]}]
+        ))
+        assert rows[0]["series"] == "svc=api"
+
+    def test_alias_names_unlabelled_series(self):
+        from signoz_cli.commands.common import _unwrap_time_series
+
+        rows = _unwrap_time_series(self._resp([{"labels": [], "values": [{"timestamp": 1, "value": 1}]}]))
+        assert rows[0]["series"] == "__result_0"
+
+    def test_malformed_labels_do_not_raise(self):
+        from signoz_cli.commands.common import _unwrap_time_series
+
+        rows = _unwrap_time_series(self._resp(
+            [{"labels": ["junk", {"key": None, "value": "x"}], "values": [{"timestamp": 1, "value": 1}]}]
+        ))
+        assert rows[0]["series"] == "=x"

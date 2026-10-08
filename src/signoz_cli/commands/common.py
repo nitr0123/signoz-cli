@@ -835,6 +835,19 @@ def maybe_notify_update() -> None:
 _MAX_JSON_BYTES = 32 * 1024 * 1024
 
 
+def _series_label_key(label: dict[str, Any]) -> str:
+    """Name of a v5 series label's key.
+
+    SigNoz v0.138 sends ``{"key": {"name": "host", ...}, "value": "web-1"}``;
+    older responses (and some fixtures) use a plain string key. Without this,
+    a group-by printed the whole key object and every series looked alike.
+    """
+    key = label.get("key")
+    if isinstance(key, dict):
+        return str(key.get("name", ""))
+    return "" if key is None else str(key)
+
+
 def _unwrap_time_series(data: Any) -> list[dict[str, Any]]:
     """Flatten a v5 time_series response into (series, timestamp, value) rows.
 
@@ -848,11 +861,14 @@ def _unwrap_time_series(data: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for result in results or []:
         for agg in result.get("aggregations") or []:
+            # The alias ("__result_0", "__result_1", ...) is kept as the fallback
+            # name: with several aggregations it is what keeps them apart.
             alias = agg.get("alias") or ""
             for s in agg.get("series") or []:
                 labels = s.get("labels") or []
                 label_str = ", ".join(
-                    f"{lb.get('key','')}={lb.get('value','')}" for lb in labels
+                    f"{_series_label_key(lb)}={lb.get('value', '')}"
+                    for lb in labels if isinstance(lb, dict)
                 ) or alias or "A"
                 for point in s.get("values") or []:
                     rows.append({
