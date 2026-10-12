@@ -11,6 +11,9 @@
 - Grafana import: `dashboards convert grafana.json --out signoz.json`
   (PromQL/SQL targets, text/interval variables; unsupported panels and
   targets reported, never silently dropped; output passes `lint`).
+- SigNoz 0.144+ APIs: `alerts rules` (server-side filter/sort/page via
+  `/api/v3/rules`), `traces flamegraph`, `alerts history-fields`
+  (history filter key/value discovery). Older servers fail cleanly.
 
 ### Changed
 

@@ -157,6 +157,76 @@ def alerts_history(
         _handle_error(ex)
 
 
+@alerts.command("rules")
+@_common_options
+@click.option("--query", default=None,
+              help="Filter DSL, e.g. \"team = infra\" (SigNoz 0.144+).")
+@click.option("--state", "states", multiple=True,
+              help="Filter by evaluation state (repeatable).")
+@click.option("--sort", type=click.Choice(
+    ["updated_at", "created_at", "name", "state", "severity"]),
+    default=None, help="Sort field (SigNoz 0.144+).")
+@click.option("--order", type=click.Choice(["asc", "desc"]),
+              default=None, help="Sort order.")
+@click.option("--limit", type=int, default=50, show_default=True,
+              help="Page size.")
+@click.option("--offset", type=int, default=0, show_default=True,
+              help="Page offset.")
+def alerts_rules(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, query: str | None, states: tuple[str, ...],
+    sort: str | None, order: str | None, limit: int, offset: int,
+) -> None:
+    """List alert rules with server-side filter, sort and paging (v3 API).
+
+    Needs SigNoz 0.144+; older servers fail cleanly with a version hint.
+    Unlike `alerts list` (firing alerts), this lists rule definitions.
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        data = client.list_rules_v3(
+            query=query, states=list(states) or None, sort=sort,
+            order=order, limit=limit, offset=offset)
+        emit(data, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@alerts.command("history-fields")
+@_common_options
+@click.argument("rule_id")
+@click.option("--signal", default="traces", show_default=True,
+              type=click.Choice(["traces", "logs", "metrics"]),
+              help="Telemetry signal for field discovery.")
+@click.option("--field", "field_name", default=None,
+              help="Show values for this field instead of listing keys.")
+@click.option("--search", default="",
+              help="Free-text filter over keys or values.")
+@click.option("--limit", type=int, default=100, show_default=True,
+              help="Max keys or values.")
+@_time_options(default_range="24h")
+def alerts_history_fields(
+    endpoint: str | None, token: str | None, fmt: str,
+    profile: str | None, rule_id: str, signal: str,
+    field_name: str | None, search: str, limit: int,
+    time_range: str | None, start: int | None, end: int | None,
+) -> None:
+    """Discover history filter keys (or values for --field) of a rule."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        s, e = resolve_timestamps(start, end, time_range, default_range="24h", profile_time_range=_profile_time_range(profile))
+        if field_name:
+            data = client.get_history_filter_values(
+                rule_id, field_name, signal=signal, limit=limit,
+                search_text=search, start=s, end=e)
+        else:
+            data = client.get_history_filter_keys(
+                rule_id, signal=signal, limit=limit, start=s, end=e)
+        emit(data, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
 @alerts.command("history-stats")
 @_common_options
 @click.argument("rule_id")

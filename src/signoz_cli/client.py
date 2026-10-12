@@ -143,6 +143,38 @@ class SigNozClient:
         """List all alert rule definitions (for export/migration)."""
         return self._get("/api/v1/rules")
 
+    def list_rules_v3(
+        self,
+        query: str | None = None,
+        states: list[str] | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> Any:
+        """GET /api/v3/rules (SigNoz 0.144+: filter DSL, states, sort, paging).
+
+        ``states`` is sent as repeated query params. Returns rules plus
+        the org's label pairs and reserved filter keywords.
+        """
+        from urllib.parse import urlencode
+
+        params: list[tuple[str, str]] = []
+        if query:
+            params.append(("query", query))
+        for state in states or []:
+            params.append(("states", state))
+        if sort:
+            params.append(("sort", sort))
+        if order:
+            params.append(("order", order))
+        if limit is not None:
+            params.append(("limit", str(limit)))
+        if offset is not None:
+            params.append(("offset", str(offset)))
+        qs = ("?" + urlencode(params)) if params else ""
+        return self._parse(self._request("GET", f"/api/v3/rules{qs}"))
+
     def get_alert(self, rule_id: str) -> Any:
         return self._get(f"/api/v1/rules/{rule_id}")
 
@@ -188,6 +220,48 @@ class SigNozClient:
             f"/api/v2/rules/{rule_id}/history/top_contributors",
             params={"start": str(start), "end": str(end)},
         )
+
+    def get_history_filter_keys(
+        self,
+        rule_id: str,
+        signal: str = "traces",
+        limit: int = 100,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> Any:
+        """GET /api/v2/rules/{id}/history/filter_keys (field discovery)."""
+        params: dict[str, str] = {"signal": signal, "limit": str(limit)}
+        if start is not None:
+            params["startUnixMilli"] = str(start)
+        if end is not None:
+            params["endUnixMilli"] = str(end)
+        return self._get(
+            f"/api/v2/rules/{rule_id}/history/filter_keys", params=params)
+
+    def get_history_filter_values(
+        self,
+        rule_id: str,
+        field_name: str,
+        signal: str = "traces",
+        limit: int = 100,
+        search_text: str = "",
+        start: int | None = None,
+        end: int | None = None,
+    ) -> Any:
+        """GET /api/v2/rules/{id}/history/filter_values (value discovery)."""
+        params: dict[str, str] = {
+            "signal": signal,
+            "name": field_name,
+            "limit": str(limit),
+        }
+        if search_text:
+            params["searchText"] = search_text
+        if start is not None:
+            params["startUnixMilli"] = str(start)
+        if end is not None:
+            params["endUnixMilli"] = str(end)
+        return self._get(
+            f"/api/v2/rules/{rule_id}/history/filter_values", params=params)
 
     # ------------------------------------------------------------------
     # Dashboards v2 (Perses-compatible schema, required on 0.135+)
@@ -330,6 +404,10 @@ class SigNozClient:
             json={},
         )
         return self._parse(resp)
+
+    def get_flamegraph(self, trace_id: str) -> Any:
+        """GET /api/v3/traces/{id}/flamegraph (SigNoz 0.144+)."""
+        return self._get(f"/api/v3/traces/{trace_id}/flamegraph")
 
     # ------------------------------------------------------------------
     # Alert rule management (v2)

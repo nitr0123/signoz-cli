@@ -184,6 +184,7 @@ signoz metrics field-values system_memory_usage
 
 ```shell
 signoz alerts list
+signoz alerts rules --query "team = infra" --state firing --sort name  # v3 API (0.144+)
 signoz alerts get RULE_ID
 # v2 history API: cursor-paginated timeline
 signoz alerts history RULE_ID --time-range 24h --order desc
@@ -261,6 +262,7 @@ OTel metrics keep dotted names, so PromQL queries need brace selectors.
 ```shell
 signoz traces detail TRACE_ID        # spans with attributes/events
 signoz traces waterfall TRACE_ID     # ASCII timeline (raw: detail -f json)
+signoz traces flamegraph TRACE_ID    # flamegraph view (SigNoz 0.144+)
 signoz metrics query e2e.requests.total --time-aggregation sum --compare 7d
 signoz logs tail --service payment-svc
 signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test

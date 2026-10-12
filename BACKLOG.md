@@ -5,9 +5,7 @@ tests + docs; security-sensitive items get an adversarial pass first.
 
 ## Planned (ordered)
 
-- [ ] **Grafana dashboard import conversion** — translate Grafana JSON to
-  the Perses-compatible v2 schema on import. Needs research into Grafana
-  panel/query schema coverage.
+*None — backlog is empty. New work: track the next SigNoz release.*
 
 ## Shipped (v0.5.x series)
 
