@@ -71,3 +71,24 @@ jobs:
           else
             gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes "Release $TAG"
           fi
+
+  pypi:
+    name: Publish to PyPI
+    needs: release
+    # Off until the PyPI trusted publisher is registered for this repo and
+    # workflow (environment "pypi"); then set repo variable PYPI_PUBLISH=true.
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/signoz-cli/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Fetch release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist -p '*.whl' -p '*.tar.gz'
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
