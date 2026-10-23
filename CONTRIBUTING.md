@@ -59,12 +59,8 @@ HTTP interactions are covered with `httpx.MockTransport`, and CLI flows with
 3. Merge to `main`, then create and push the tag **in its own push**:
 
    ```shell
-   git tag -a vX.Y.Z -m "..." && git push forgejo vX.Y.Z
+   git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z
    ```
 
-   Note: pushing a branch and a tag in the same `git push` (or re-pushing an
-   identical tag object) can swallow the Forgejo push event — tags must point
-   at fresh commits and be pushed alone.
-
 CI then builds the wheel/sdist, smoke-tests the install, and attaches the
-artifacts to the auto-created release (uses the repo secret `RELEASE_TOKEN`).
+artifacts to a GitHub Release (uses the built-in `GITHUB_TOKEN`).

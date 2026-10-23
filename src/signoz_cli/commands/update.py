@@ -18,8 +18,6 @@ from signoz_cli.commands.common import (
     cli,
 )
 
-DEFAULT_PYPI_INDEX = "https://git.example.com/api/packages/hamza/pypi/simple"
-
 
 def _pipx_upgrade_command(meta_path: str, repo: str) -> list[str] | None:
     """Build a source-faithful pipx reinstall command, or None to fall back.
@@ -124,9 +122,9 @@ def _detect_install_method() -> tuple[str, Any, str]:
             return (
                 "pip",
                 None,
-                "set SIGNOZ_PYPI_INDEX to your registry index URL "
-                f"(e.g. {DEFAULT_PYPI_INDEX} with credentials), then "
-                "re-run with --apply",
+                "set SIGNOZ_PYPI_INDEX to your registry index URL, then "
+                "re-run with --apply (or reinstall from git: "
+                f"pipx install --force git+{UPDATE_REPO}@<tag>)",
             )
         # NOTE: the index URL (which embeds registry credentials) is
         # passed via the environment, never via argv: argv is visible to
@@ -163,7 +161,7 @@ def update_cmd(apply: bool) -> None:
         current = _parse_version(__version__)
         if latest is None:
             click.echo("Could not determine the latest release "
-                       "(git/SSH unavailable?). Try again later.")
+                       "(git/network unavailable?). Try again later.")
             return
         click.echo(f"Installed: v{__version__}")
         click.echo(f"Latest:    {latest}")

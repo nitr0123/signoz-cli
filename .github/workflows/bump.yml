@@ -1,30 +1,33 @@
 name: Bump version
 
-# Merge to main -> semver patch bump -> push tag -> triggers Release workflow.
+# Merge to main -> semver patch bump -> push tag -> call the Release workflow.
 #
-# Deliberately NO [skip ci] in the bump commit: Forgejo applies
-# SKIP_WORKFLOW_STRINGS to the tagged commit too, so a skip marker would
-# suppress the tag-triggered Release run as well (observed: v0.5.2 tag
-# created zero runs). Loop protection comes from the "Skip if version
-# bump commit" step below (git log guard) instead: a bump commit triggers
-# one extra CI + bump run, both of which no-op and terminate.
+# Release is invoked directly (workflow_call) rather than via the tag push:
+# pushes made with GITHUB_TOKEN deliberately do not trigger other workflows.
+# The same rule means the bump commit itself starts no new runs; the
+# "Skip if version bump commit" guard stays as a belt-and-braces loop stop.
 # cancel-in-progress: false guarantees the bump itself is never
-# superseded mid-flight (see Forgejo Actions reference on concurrency).
+# superseded mid-flight.
 on:
   push:
     branches: [main]
 
 concurrency:
+  group: bump
   cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
   bump:
     name: Semver patch bump + tag
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.RELEASE_TOKEN }}
           fetch-depth: 0
 
       - name: Skip if version bump commit
@@ -58,6 +61,7 @@ jobs:
           echo "Latest tag: $LATEST -> Next: $NEXT"
 
       - name: Bump version, commit and tag
+        id: tag
         if: steps.check.outputs.skip != 'true'
         run: |
           NEXT="${{ steps.version.outputs.next }}"
@@ -80,3 +84,12 @@ jobs:
             git tag "$NEXT"
             git push origin "$NEXT"
           fi
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Release
+    needs: bump
+    if: needs.bump.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}

@@ -20,82 +20,47 @@ Built for the current SigNoz API surface:
 
 Requires Python 3.10+.
 
-### Package registry (recommended)
+### From GitHub (recommended)
 
-The releases publish to the built-in PyPI registry. One-time credential
-setup (personal access token with `read:package`):
-
-```shell
-export PIP_INDEX_URL="https://hamza:$FORGEJO_TOKEN@git.example.com/api/packages/hamza/pypi/simple"
-export PIP_EXTRA_INDEX_URL="https://pypi.org/simple"
-```
-
-then install or upgrade a pinned release (pins protect against
-dependency-confusion lookalikes):
+Install a pinned release tag with pipx:
 
 ```shell
-pipx install "signoz-cli==0.5.14"
+pipx install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.43"
 # or plain pip:
-pip install "signoz-cli==0.5.14"
-```
-
-Without pipx, or for the newest tag without looking it up, `install.sh`
-does the same with a pip fallback:
-
-```shell
-SIGNOZ_PYPI_INDEX="https://hamza:$FORGEJO_TOKEN@git.example.com/api/packages/hamza/pypi/simple" \
-  sh install.sh            # newest release
-SIGNOZ_PYPI_INDEX="..." sh install.sh 0.5.14   # pinned
-```
-
-### From git (no registry token needed)
-
-Needs SSH access to the Forgejo host instead:
-
-```shell
-pipx install --force "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.14"
-sh install.sh              # newest tag via git ls-remote
-sh install.sh v0.5.14      # pinned
+pip install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.43"
 ```
 
 ### Helper script
 
-`install.sh` wraps the above: it resolves the newest tag, prefers pipx with
-a pip fallback, and verifies with `signoz --version`.
+`install.sh` resolves the newest tag (via `git ls-remote`), prefers pipx with
+a pip fallback, and verifies with `signoz --version`:
 
 ```shell
-sh install.sh [version]   # defaults to newest release tag
+curl -fsSL https://raw.githubusercontent.com/nitr0123/signoz-cli/main/install.sh | sh
+sh install.sh v0.5.43      # pinned, from a clone
 ```
 
-Because this Forgejo instance sits behind SSO, downloading the script needs
-your API token (or just copy it out of a clone):
-
-```shell
-curl -fsSL -H "Authorization: token $FORGEJO_TOKEN" \
-  "http://localhost:3001/api/v1/repos/hamza/signoz-cli/contents/install.sh?ref=main" |
-  python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" | sh
-```
+Set `SIGNOZ_PYPI_INDEX` to install from a PyPI-compatible package index
+instead of git.
 
 ### From a release wheel
 
 ```shell
-curl -sL -H "Authorization: token $FORGEJO_TOKEN" -O \
-  "https://git.example.com/hamza/signoz-cli/releases/download/v0.5.8/signoz_cli-0.5.8-py3-none-any.whl"
-pip install ./signoz_cli-0.5.8-py3-none-any.whl
+pip install "https://github.com/nitr0123/signoz-cli/releases/download/v0.5.43/signoz_cli-0.5.43-py3-none-any.whl"
 ```
 
 ### From source
 
 ```shell
-git clone <this-repo> && cd signoz-cli
+git clone https://github.com/nitr0123/signoz-cli.git && cd signoz-cli
 pip install .
 
 # Editable with dev tools
 pip install -e '.[dev]'
 ```
 
-Tags are immutable — `@v0.5.8` always gives you exactly the v0.5.8 build.
-See [releases](https://git.example.com/hamza/signoz-cli/releases) for available versions.
+Tags are immutable — `@v0.5.43` always gives you exactly the v0.5.43 build.
+See [releases](https://github.com/nitr0123/signoz-cli/releases) for available versions.
 
 ## Updating
 

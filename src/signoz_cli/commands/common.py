@@ -708,7 +708,7 @@ def cli(ctx: click.Context, root_profile: str | None) -> None:
     maybe_notify_update()
 
 
-UPDATE_REPO = "ssh://forgejo/hamza/signoz-cli.git"
+UPDATE_REPO = "https://github.com/nitr0123/signoz-cli.git"
 UPDATE_CHECK_INTERVAL_S = 24 * 3600
 
 

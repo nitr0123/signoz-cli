@@ -363,13 +363,13 @@ class TestPipxSourceFidelity:
 
         (tmp_path / "pipx_metadata.json").write_text(_json.dumps({
             "main_package": {
-                "package_or_url": "git+ssh://forgejo/hamza/signoz-cli.git@v0.5.1",
+                "package_or_url": "git+https://github.com/nitr0123/signoz-cli.git@v0.5.1",
                 "pip_args": [],
             }}))
         cmd = _up._pipx_upgrade_command(
             str(tmp_path / "pipx_metadata.json"), "ssh://x/y.git")
         assert cmd == ["pipx", "install", "--force",
-                       "git+ssh://forgejo/hamza/signoz-cli.git@{tag}"]
+                       "git+https://github.com/nitr0123/signoz-cli.git@{tag}"]
 
     def test_index_source_stays_on_index(self, tmp_path):
         import json as _json

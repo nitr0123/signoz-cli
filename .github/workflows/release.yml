@@ -1,17 +1,26 @@
 name: Release
 
-# Triggered by the tag push from the Bump version workflow (Forgejo's own
-# release process works the same way: push tag -> build -> publish).
-# cancel-in-progress: false per
-# https://forgejo.org/docs/latest/user/actions/reference/ ("If you're
-# performing releases of artifacts from a branch, then you may want to
-# ensure each event's workflow is completed without being superseded").
+# Called by the Bump version workflow after it pushes a tag, or triggered
+# by a tag pushed by hand. cancel-in-progress: false so a release run is
+# never superseded halfway through publishing.
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -20,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.TAG }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -31,10 +41,10 @@ jobs:
 
       - name: Verify tag matches package version
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${TAG#v}"
           PKG=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "$TAG" != "$PKG" ]; then
-            echo "Release tag '${GITHUB_REF_NAME}' does not match package version '${PKG}'." >&2
+            echo "Release tag 'v${TAG}' does not match package version '${PKG}'." >&2
             echo "Bump pyproject.toml (and src/signoz_cli/__init__.py) to match, or fix the tag." >&2
             exit 1
           fi
@@ -51,47 +61,12 @@ jobs:
           /tmp/wheel-venv/bin/pip install dist/*.whl
           /tmp/wheel-venv/bin/signoz --version
 
-      - name: Upload artifacts to Forgejo release
+      - name: Publish GitHub release
         env:
-          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          HOST="http://localhost:3001"
-          REPO="${GITHUB_REPOSITORY}"
-          TAG="${GITHUB_REF_NAME}"
-
-          RID=$(curl -s "$HOST/api/v1/repos/$REPO/releases/tags/$TAG" \
-            -H "Authorization: token $TOKEN" \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))' 2>/dev/null || true)
-
-          if [ -z "$RID" ] || [ "$RID" = "" ] || [ "$RID" = "None" ]; then
-            echo "Release for $TAG does not exist; creating."
-            BODY=$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1], "body": "Release " + sys.argv[1]}))' "$TAG")
-            RID=$(curl -s -X POST "$HOST/api/v1/repos/$REPO/releases" \
-              -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-              -d "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes "Release $TAG"
           fi
-          echo "release id: $RID"
-
-          for f in dist/*; do
-            NAME=$(basename "$f")
-            echo "uploading $NAME"
-            curl -s -X POST \
-              "$HOST/api/v1/repos/$REPO/releases/$RID/assets?name=$NAME" \
-              -H "Authorization: token $TOKEN" \
-              -F "attachment=@$f"
-            echo
-          done
-
-          echo "Release $TAG uploaded successfully."
-
-      - name: Publish to PyPI registry
-        env:
-          TWINE_PASSWORD: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          HOST="http://localhost:3001"
-          OWNER="${GITHUB_REPOSITORY%%/*}"
-          export TWINE_USERNAME="$OWNER"
-          # RELEASE_TOKEN needs read:package + write:package scopes.
-          python3 -m twine upload --non-interactive \
-            --repository-url "$HOST/api/packages/$OWNER/pypi" \
-            dist/*

@@ -3,11 +3,11 @@
 #
 #   sh install.sh [version]
 #
-# Two modes (registry preferred):
-#   1. Package index (no SSH needed, needs a token with read:package):
+# Two modes:
+#   1. Package index (optional, when SIGNOZ_PYPI_INDEX is set):
 #        SIGNOZ_PYPI_INDEX="https://USER:TOKEN@host/api/packages/hamza/pypi/simple" \
 #          sh install.sh [version]
-#   2. Git over SSH (no token needed, needs SSH access to the forgejo host):
+#   2. Git over HTTPS from GitHub (default, no token needed):
 #        sh install.sh [version]
 #
 # Installs (or upgrades, with --force) signoz-cli into an isolated pipx
@@ -16,18 +16,18 @@
 # via `git ls-remote` in mode 2).
 #
 # Env knobs:
-#   SIGNOZ_REPO   git URL of the repo (default ssh://forgejo/hamza/signoz-cli.git)
+#   SIGNOZ_REPO   git URL of the repo (default https://github.com/nitr0123/signoz-cli.git)
 #   SIGNOZ_PIP    pip executable to use for the pip fallback (default: python3 -m pip)
 #   SIGNOZ_PYPI_INDEX
 #                 package registry index URL (with credentials if the
 #                 instance requires them). When set, installs pinned
-#                 releases from the index instead of git -- no SSH needed:
+#                 releases from the index instead of git:
 #                   SIGNOZ_PYPI_INDEX="https://USER:TOKEN@host/api/packages/hamza/pypi/simple" \
 #                     sh install.sh
 
 set -eu
 
-REPO="${SIGNOZ_REPO:-ssh://forgejo/hamza/signoz-cli.git}"
+REPO="${SIGNOZ_REPO:-https://github.com/nitr0123/signoz-cli.git}"
 WANT="${1:-latest}"
 
 die() {
