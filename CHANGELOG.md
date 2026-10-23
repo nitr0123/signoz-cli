@@ -10,6 +10,11 @@
   `SIGNOZ_PYPI_INDEX` still works for installs from a custom package index.
 - CI also tests Python 3.13 and 3.14; Actions are pinned to commit SHAs
   and kept current by Dependabot.
+- Requires click 8.3 or newer: the previous `>=8.1` floor was never
+  actually compatible. CI now tests every dependency at its declared floor.
+- A version hand-bumped in a PR (minor/major release) is tagged as-is
+  instead of being overwritten by the automatic patch bump.
+- Releases can also be published to PyPI (trusted publishing, opt-in).
 
 ## v0.5.43 (2026-10-08)
 
