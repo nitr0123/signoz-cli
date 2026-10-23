@@ -1,14 +1,15 @@
 name: Release
 
-# Called by the Bump version workflow after it pushes a tag, or triggered
-# by a tag pushed by hand. cancel-in-progress: false so a release run is
+# Dispatched by the Bump version workflow after it pushes a tag, or
+# triggered by a tag pushed by hand. cancel-in-progress: false so a release run is
 # never superseded halfway through publishing.
 on:
   push:
     tags: ["v*"]
-  workflow_call:
+  workflow_dispatch:
     inputs:
       tag:
+        description: Existing tag to release (e.g. v0.5.44)
         required: true
         type: string
 

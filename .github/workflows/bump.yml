@@ -1,9 +1,12 @@
 name: Bump version
 
-# Merge to main -> semver patch bump -> push tag -> call the Release workflow.
+# Merge to main -> semver patch bump -> push tag -> dispatch the Release workflow.
 #
-# Release is invoked directly (workflow_call) rather than via the tag push:
-# pushes made with GITHUB_TOKEN deliberately do not trigger other workflows.
+# Release is dispatched explicitly rather than relying on the tag push:
+# pushes made with GITHUB_TOKEN deliberately do not trigger other workflows,
+# but workflow_dispatch is exempt. Dispatching (instead of workflow_call)
+# keeps release.yml the top-level workflow, which PyPI trusted publishing
+# matches against.
 # The same rule means the bump commit itself starts no new runs; the
 # "Skip if version bump commit" guard stays as a belt-and-braces loop stop.
 # cancel-in-progress: false guarantees the bump itself is never
@@ -17,14 +20,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
   bump:
     name: Semver patch bump + tag
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,7 +63,6 @@ jobs:
           echo "Latest tag: $LATEST -> Next: $NEXT"
 
       - name: Bump version, commit and tag
-        id: tag
         if: steps.check.outputs.skip != 'true'
         run: |
           NEXT="${{ steps.version.outputs.next }}"
@@ -84,12 +85,9 @@ jobs:
             git tag "$NEXT"
             git push origin "$NEXT"
           fi
-          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Release
-    needs: bump
-    if: needs.bump.outputs.tag != ''
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: ${{ needs.bump.outputs.tag }}
+      - name: Dispatch release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref main -f tag="${{ steps.version.outputs.next }}"
