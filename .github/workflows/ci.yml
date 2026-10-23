@@ -47,6 +47,25 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  lowest-deps:
+    name: Tests (lowest declared dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.10"
+      - name: Install runtime dependencies at their declared floors
+        # lowest-direct: only our own dependencies are pinned to their
+        # minimums, so the floors in pyproject.toml stay honest.
+        run: |
+          pip install uv
+          uv pip install --system --resolution lowest-direct -e .
+          pip install pytest hypothesis opentelemetry-sdk opentelemetry-exporter-otlp
+          pip list
+      - name: Run tests
+        run: python -m pytest -q
+
   package:
     name: Package build check
     runs-on: ubuntu-latest
