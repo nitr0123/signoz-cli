@@ -1,5 +1,10 @@
 # signoz-cli
 
+[![CI](https://github.com/nitr0123/signoz-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/nitr0123/signoz-cli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nitr0123/signoz-cli)](https://github.com/nitr0123/signoz-cli/releases/latest)
+[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue)](pyproject.toml)
+[![License](https://img.shields.io/github/license/nitr0123/signoz-cli)](LICENSE)
+
 A command-line tool for querying traces, logs, metrics, alerts, dashboards, and services from [SigNoz](https://signoz.io/).
 
 **Supported SigNoz versions:** `>= 0.136` — verified live against **v0.136.1** and **v0.138.0**.
