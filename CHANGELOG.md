@@ -1,62 +1,127 @@
 # Changelog
 
-## v0.4.0 (2026-08-26)
-
-### Fixed
-
-- `logs tail` no longer reprints overlapping rows on every poll (dedup key
-  never existed in the query output); eviction now keeps insertion order
-- Filter values containing apostrophes no longer produce HTTP 400 -
-  escaped with SQL-style quote doubling, live-verified against v0.138
-- Network errors (connection reset, DNS, read timeout) are retried like
-  transient HTTP failures instead of failing immediately
+## Unreleased
 
 ### Changed
 
-- Stricter ruff rule set (import sorting, bugbear, pyupgrade, blind-except)
-- Package ships a `py.typed` marker
-- Timeouts report an actionable message suggesting --timeout / narrower range
-- Client connection pool closed on process exit
+- The project now lives on GitHub: https://github.com/nitr0123/signoz-cli.
+  `signoz update`, `install.sh` and the README install from GitHub over
+  HTTPS (no SSH or registry token needed); releases are GitHub Releases.
+  `SIGNOZ_PYPI_INDEX` still works for installs from a custom package index.
+- CI also tests Python 3.13 and 3.14; Actions are pinned to commit SHAs
+  and kept current by Dependabot.
 
-### Added
+## v0.5.43 (2026-10-08)
 
-- Command-level e2e tests for logs/traces/metrics queries (JSON/table/CSV,
-  -o, error paths), live integration suite remains opt-in via pytest marker
+### Fixed
 
-## Unreleased
+- v5 time-series results whose label keys arrive as objects (rather than
+  plain strings) are read correctly instead of producing empty labels.
+
+## v0.5.42 (2026-09-29)
 
 ### Added
 
 - SigNoz 0.140+ AI observability: `ai fields`, `ai field-values`,
-  `ai pricing-rules list/get/create/delete`, `ai unmapped-models`
-  (fields/pricing verified live on 0.138; pricing also returns empty
-  cleanly where unconfigured).
+  `ai pricing-rules list/get/create/delete`, `ai unmapped-models`.
 - Notification channels **v2** (SigNoz 0.141+): `channels
   list/get/create/update/delete --api v2` (paginated, searchable,
   kind-filtered) plus `channels repair ID [--apply]` (dry-run by
   default). v1 remains the default and works on all servers.
-- Dashboard `lint` no longer flags 0.142+ text/static panels for
-  missing `queries`.
-- PyPI registry publishing: every release now also lands in the
-  Forgejo package registry (`signoz update` detects index installs;
-  `pipx install signoz-cli==X` with `PIP_INDEX_URL` set).
-- `install.sh` installs from the package index when
-  `SIGNOZ_PYPI_INDEX` is set (no SSH needed), otherwise from git.
-- `signoz update` — check for newer releases and upgrade (`--apply`
-  supports pipx and pip-from-git installs; source checkouts get
-  `git pull` instructions). A daily cached check prints a stderr
-  notice in TTY sessions (opt out with `SIGNOZ_NO_UPDATE_CHECK=1`).
-- `install.sh` — one-step installer resolving the newest release tag
-  (pipx preferred, pip fallback, `signoz --version` verification).
-- `metrics top` — rank series by latest value (fixed sum/Cumulative
-  volume semantics).
-- `traces tail` / `alerts watch` — follow new spans and firing alerts
-  with dedupe caps, interval validation, and fatal-error fast exit.
-- `history` / `rerun` — local query history (`--token` invocations
-  are never recorded).
+- `dashboards diff-remote` / `alerts diff-remote` compare resources across
+  two SigNoz instances.
+
+### Changed
+
+- Dashboard `lint` no longer flags 0.142+ text/static panels for missing
+  `queries`.
+- Internal refactors: `inventory.py` and `history.py` split out of the large
+  command modules; one shared time-series output pipeline.
+- Dependency floors refreshed (PyYAML).
+
+## v0.5.28 – v0.5.41 (2026-09-21 – 2026-09-23)
+
+### Added
+
+- MCP server (`signoz mcp`) built on the official SDK: stdio transport,
+  read-only by default.
+- ASCII charts (`--chart`) and a `watch` command.
+- Trace waterfall view and week-over-week `compare`.
+- Offline `dashboards lint` / `alerts lint`, suitable for CI.
+- `doctor` diagnostics, `channels test` notifications, a metrics
+  cardinality explorer, and declarative bundle `apply` (plan preview,
+  prune, skip-if-identical).
+- Saved queries: a local named store for PromQL/SQL/builder queries.
+- Z-score anomaly detection on time series.
+
+### Security
+
+- Secret files are never written through symlinks; the config directory is
+  tightened to 0700.
+- CSV output neutralises spreadsheet formula injection.
+- Environment-controlled git repo URLs are passed after `--` (end of
+  options), and failing upgrade tools report a clean error.
+- Security review of the chart, watch and MCP error paths; MCP timestamp
+  arguments are type-validated.
+
+## v0.5.18 – v0.5.27 (2026-09-19 – 2026-09-20)
+
+### Added
+
+- Downtime schedules.
+- YAML output through PyYAML (replacing the hand-rolled emitter).
+
+### Security
+
+- Terminal-injection, history secret-bypass and file-permission fixes;
+  private files are created with restrictive permissions from birth.
+- Secret-leak sweep: credentials embedded in endpoint URLs and pip/git
+  install URLs are redacted from display; index credentials travel via the
+  environment, never argv.
+- Hostile-file hardening for bundle import (size cap, symlink guard, export
+  de-duplication) and safe rendering of untrusted values in plain output.
+- Transport strictness (explicit insecure flag, redirect evidence) and
+  confirm-before-destroy semantics, including views restore.
+- Malformed configs fail closed.
+
+### Fixed
+
+- YAML round-trip fidelity (exponent floats, resolver lookalikes, flow-style
+  commas) and JSON fidelity in output.
+
+## v0.5.11 – v0.5.17 (2026-09-10 – 2026-09-18)
+
+### Added
+
+- Complete views and channels CRUD; views migrated to the explorer API.
 - Bundle `export` / `import` with manifest, dry-run, and
   skip/overwrite/fail conflict modes, plus `dashboards diff` and
   `alerts diff` against the server version.
+- `traces tail` / `alerts watch` follow new spans and firing alerts with
+  dedupe caps, interval validation, and fatal-error fast exit.
+- `metrics top` ranks series by latest value.
+- `history` / `rerun`: local query history (`--token` invocations are never
+  recorded).
+- `signoz update` checks for newer releases and upgrades (`--apply`
+  supports pipx, pip-from-git and index installs; source checkouts get
+  `git pull` instructions). A daily cached check prints a stderr notice in
+  TTY sessions (opt out with `SIGNOZ_NO_UPDATE_CHECK=1`).
+- `install.sh`: one-step installer resolving the newest release tag (pipx
+  preferred, pip fallback, `signoz --version` verification); installs from
+  a package index when `SIGNOZ_PYPI_INDEX` is set.
+- Releases were also published to a self-hosted PyPI registry.
+
+## v0.5.0 – v0.5.10 (2026-09-03 – 2026-09-08)
+
+### Added
+
+- kubectl-style output options and an `explain` command.
+- `metrics stats`: summary statistics per group.
+- Pager support and per-profile defaults for time range and output format.
+- `status` command and shell completion; command-line conventions aligned
+  with clig.dev.
+- Automatic releases: merging to `main` bumps the patch version, tags, and
+  publishes the build.
 
 ### Fixed
 
@@ -96,7 +161,6 @@
 - The package now ships a `py.typed` marker so downstream consumers get types
 - End-to-end CLI tests added for the query commands (logs/traces/metrics,
   JSON/table/CSV, `-o`, error paths, `logs tail` dedup)
-
 - PromQL/SQL request payloads are built by the shared `query.py` builders
   instead of duplicated inline in the client, removing a second source of truth
 - `resolve_timestamps` now honours a lone `--start` (window runs to now) or
@@ -105,6 +169,37 @@
   stderr instead of silently resolving to "no config"
 - `logs search --all` / `traces search --all` warn on stderr when results are
   truncated at the internal page cap, instead of stopping silently
+
+### Changed
+
+- `main.py` split into a `commands/` package.
+- Contract fixtures, filter property tests and negative-path tests; live
+  integration suite seeds its own telemetry.
+- Several adversarial review rounds: idempotent retries, input validation,
+  fail-fast inputs and profile safety.
+
+## v0.4.0 (2026-08-26)
+
+### Fixed
+
+- `logs tail` no longer reprints overlapping rows on every poll (dedup key
+  never existed in the query output); eviction now keeps insertion order
+- Filter values containing apostrophes no longer produce HTTP 400 -
+  escaped with SQL-style quote doubling, live-verified against v0.138
+- Network errors (connection reset, DNS, read timeout) are retried like
+  transient HTTP failures instead of failing immediately
+
+### Changed
+
+- Stricter ruff rule set (import sorting, bugbear, pyupgrade, blind-except)
+- Package ships a `py.typed` marker
+- Timeouts report an actionable message suggesting --timeout / narrower range
+- Client connection pool closed on process exit
+
+### Added
+
+- Command-level e2e tests for logs/traces/metrics queries (JSON/table/CSV,
+  -o, error paths), live integration suite remains opt-in via pytest marker
 
 ## v0.3.0 (2026-08-26)
 
@@ -125,7 +220,7 @@
 - Resilience: automatic retry/backoff on 429/5xx honoring Retry-After,
   `--timeout`, `--insecure` (+ SIGNOZ_TIMEOUT / SIGNOZ_INSECURE env vars)
 - CSV output format and `-o/--output FILE`
-- Release automation: tag pushes build a wheel and attach it to the Forgejo
+- Release automation: tag pushes build a wheel and attach it to the
   release
 - mypy type checking in CI; marker-gated live integration test suite
 
@@ -136,7 +231,7 @@
 - `auth verify` now reports the server's SigNoz version and whether it is
   within the tested compatibility range (`>=0.136`)
 - Supported-range metadata: verified live against SigNoz v0.136.1 and v0.138.0
-- Pinned install instructions; release wheel published to Forgejo releases
+- Pinned install instructions; release wheel published to the release page
 
 ## v0.2.0 (2026-08-25)
 
