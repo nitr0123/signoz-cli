@@ -43,7 +43,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute next semver patch
+      - name: Compute next version
         if: steps.check.outputs.skip != 'true'
         id: version
         run: |
@@ -56,8 +56,14 @@ jobs:
           MAJOR=$(echo "$TAG_NUM" | cut -d. -f1)
           MINOR=$(echo "$TAG_NUM" | cut -d. -f2)
           PATCH=$(echo "$TAG_NUM" | cut -d. -f3)
-          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           NEXT_NUM="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          # A version hand-bumped past the latest tag in the PR (minor or
+          # major release) wins over the automatic patch bump.
+          PKG=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PKG" != "$TAG_NUM" ] && [ "$(printf '%s\n%s\n' "$TAG_NUM" "$PKG" | sort -V | tail -n1)" = "$PKG" ]; then
+            NEXT_NUM="$PKG"
+          fi
+          NEXT="v${NEXT_NUM}"
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "next_num=$NEXT_NUM" >> "$GITHUB_OUTPUT"
           echo "Latest tag: $LATEST -> Next: $NEXT"
