@@ -267,7 +267,7 @@ class TestExtractErrorMessage:
 class TestServiceAccountRoles:
     def test_failed_role_assignment_reported(self):
         def handler(request):
-            if "/roles" in request.url.path:
+            if "service_account_roles" in request.url.path:
                 return httpx.Response(403, json={"error": {
                     "code": "authz_forbidden", "message": "not allowed"}})
             return httpx.Response(201, json={"data": {"id": "sa1"}})
@@ -277,12 +277,20 @@ class TestServiceAccountRoles:
         assert failed and "role-id-1" in failed[0]
 
     def test_successful_role_assignment(self):
+        seen = []
+
         def handler(request):
-            return httpx.Response(200, json={"status": "success", "data": {}})
+            seen.append(request)
+            return httpx.Response(201, json={"status": "success", "data": {"id": "sa1"}})
 
         c = make_client(handler)
         _data, failed = c.create_service_account("new-sa", ["role-id-1"])
         assert failed == []
+        role_req = seen[1]
+        assert role_req.method == "POST"
+        assert role_req.url.path == "/api/v1/service_account_roles"
+        assert json.loads(role_req.content) == {
+            "serviceAccountId": "sa1", "roleId": "role-id-1"}
 
 
 class TestNonJsonResponses:
@@ -445,7 +453,23 @@ class TestV0145Endpoints:
     def test_flamegraph_path(self):
         h = RecordingHandler()
         make_client(h).get_flamegraph("abc123")
-        assert str(h.requests[0].url) == BASE + "/api/v3/traces/abc123/flamegraph"
+        req = h.requests[0]
+        assert req.method == "POST"
+        assert str(req.url) == BASE + "/api/v3/traces/abc123/flamegraph"
+        assert json.loads(req.content) == {"selectedSpanId": ""}
+
+    def test_pricing_rule_create_is_bulk_put(self):
+        h = RecordingHandler()
+        c = make_client(h)
+        c.create_llm_pricing_rule({"modelName": "m"})
+        c.create_llm_pricing_rule([{"modelName": "a"}, {"modelName": "b"}])
+        c.create_llm_pricing_rule({"rules": [{"modelName": "c"}]})
+        assert [r.method for r in h.requests] == ["PUT"] * 3
+        assert str(h.requests[0].url) == BASE + "/api/v1/llm_pricing_rules"
+        bodies = [json.loads(r.content) for r in h.requests]
+        assert bodies[0] == {"rules": [{"modelName": "m"}]}
+        assert len(bodies[1]["rules"]) == 2
+        assert bodies[2] == {"rules": [{"modelName": "c"}]}
 
     def test_history_filter_params(self):
         h = RecordingHandler()

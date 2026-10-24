@@ -405,9 +405,13 @@ class SigNozClient:
         )
         return self._parse(resp)
 
-    def get_flamegraph(self, trace_id: str) -> Any:
-        """GET /api/v3/traces/{id}/flamegraph (SigNoz 0.144+)."""
-        return self._get(f"/api/v3/traces/{trace_id}/flamegraph")
+    def get_flamegraph(self, trace_id: str, selected_span_id: str = "") -> Any:
+        """POST /api/v3/traces/{id}/flamegraph (SigNoz 0.144+).
+
+        The route only accepts POST (a GET falls through to the SPA page).
+        """
+        return self._post(f"/api/v3/traces/{trace_id}/flamegraph",
+                          json_body={"selectedSpanId": selected_span_id})
 
     # ------------------------------------------------------------------
     # Alert rule management (v2)
@@ -570,9 +574,21 @@ class SigNozClient:
     def list_llm_pricing_rules(self) -> Any:
         return self._get("/api/v1/llm_pricing_rules")
 
-    def create_llm_pricing_rule(self, rule: dict[str, Any]) -> Any:
-        return self._post("/api/v1/llm_pricing_rules",
-                          json_body=rule, idempotent=False)
+    def create_llm_pricing_rule(self, rule: Any) -> Any:
+        """PUT /api/v1/llm_pricing_rules — bulk upsert, never replaces others.
+
+        Accepts one rule, a list of rules, or a ``{"rules": [...]}`` body.
+        The server answers 204 with no body.
+        """
+        if isinstance(rule, dict) and isinstance(rule.get("rules"), list):
+            body = rule
+        elif isinstance(rule, list):
+            body = {"rules": rule}
+        else:
+            body = {"rules": [rule]}
+        resp = self._request("PUT", "/api/v1/llm_pricing_rules",
+                             json_body=body, idempotent=False)
+        return self._parse(resp, allow_empty=True)
 
     def get_llm_pricing_rule(self, rule_id: str) -> Any:
         return self._get(f"/api/v1/llm_pricing_rules/{rule_id}")
@@ -626,8 +642,8 @@ class SigNozClient:
                 for rid in role_ids:
                     try:
                         self._post(
-                            f"/api/v1/service_accounts/{new_id}/roles",
-                            json_body={"id": rid},
+                            "/api/v1/service_account_roles",
+                            json_body={"serviceAccountId": new_id, "roleId": rid},
                             idempotent=False,
                         )
                     except SigNozApiError as exc:

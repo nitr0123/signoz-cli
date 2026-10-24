@@ -39,6 +39,7 @@ def _grafana_doc() -> dict:
             {"id": 5, "title": "Row", "type": "row",
              "panels": [{"id": 6, "title": "Nested", "type": "stat",
                          "targets": [{"refId": "A", "expr": "up"}]}]},
+            {"id": 7, "title": "Map", "type": "geomap"},
         ],
     }
 
@@ -51,7 +52,7 @@ class TestConvert:
         assert out["spec"]["display"]["name"] == "Payments Overview"
         assert out["tags"] == ["payments", "prod"]
         assert out["spec"]["layouts"] == []
-        assert len(out["spec"]["panels"]) == 4  # heatmap skipped
+        assert len(out["spec"]["panels"]) == 5  # geomap skipped
         ts = out["spec"]["panels"]["panel-rps-0"]
         assert ts["spec"]["plugin"]["kind"] == "signoz/TimeSeriesPanel"
         q = ts["spec"]["queries"][0]
@@ -72,6 +73,10 @@ class TestConvert:
             "signoz/ClickHouseSQL"
         stat = out["spec"]["panels"]["panel-nested-4"]
         assert stat["spec"]["plugin"]["kind"] == "signoz/NumberPanel"
+        heat = out["spec"]["panels"]["panel-old-3"]
+        assert heat["spec"]["plugin"]["kind"] == "signoz/HeatmapPanel"
+        assert heat["spec"]["queries"][0]["spec"]["plugin"]["spec"]["query"] == "x"
+        assert any("0.146+" in w for w in warnings)
 
     def test_variables(self):
         out, warnings = convert_dashboard(_grafana_doc())
@@ -84,7 +89,7 @@ class TestConvert:
     def test_warnings_name_drops(self):
         _, warnings = convert_dashboard(_grafana_doc())
         blob = "\n".join(warnings)
-        assert "heatmap" in blob
+        assert "geomap" in blob
         assert "Row" not in blob  # rows flatten silently, no warning needed
 
     def test_non_object_rejected(self):

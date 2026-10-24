@@ -4,7 +4,8 @@ Covers the common Grafana surface faithfully; anything else is reported
 as a warning and never silently dropped:
 
 - panels: graph/timeseries -> TimeSeries, stat/gauge -> Number,
-  table -> Table, text -> Text, pie -> Pie (other types skipped)
+  table -> Table, text -> Text, pie -> Pie, heatmap -> Heatmap
+  (0.146+; other types skipped)
 - targets: ``expr`` -> PromQL query plugin, ``rawSql`` -> ClickHouse SQL
   (other datasource targets skipped)
 - variables: interval/constant/custom/textbox -> TextVariable,
@@ -15,7 +16,7 @@ as a warning and never silently dropped:
 - rows (legacy) are flattened; thresholds/fieldConfig/links/annotations
   are reported as dropped
 
-Target shapes follow the SigNoz v0.143 openapi spec
+Target shapes follow the SigNoz v0.147 openapi spec
 (``DashboardtypesPanelSpec``, ``DashboardtypesQuerySpec``,
 ``DashboardtypesTextVariableSpec``).
 """
@@ -33,6 +34,7 @@ _PANEL_KINDS = {
     "bargauge": "signoz/NumberPanel",
     "table": "signoz/TablePanel",
     "text": "signoz/TextPanel",
+    "heatmap": "signoz/HeatmapPanel",
     "pie": "signoz/PieChartPanel",
     "piechart": "signoz/PieChartPanel",
 }
@@ -161,6 +163,9 @@ def _convert_panel(panel: dict[str, Any],
             warnings.append(f"panel {title!r}: {warning}")
     if not queries:
         warnings.append(f"panel {title!r} has no convertible queries")
+    if kind == "signoz/HeatmapPanel":
+        warnings.append(
+            f"panel {title!r}: heatmap panels need SigNoz 0.146+")
     return key, {
         "kind": "Panel",
         "spec": {
