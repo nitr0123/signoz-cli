@@ -164,6 +164,8 @@ signoz logs by-service consumer-svc --search-text "timeout"
 signoz logs aggregate --aggregation count --group-by "service.name"
 signoz logs fields
 signoz logs field-values service.name
+signoz logs export --service api --time-range 24h --out api.csv   # all fields, streamed
+signoz logs export --severity ERROR --out errors.jsonl --limit 50000
 ```
 
 ### Traces
@@ -175,6 +177,9 @@ signoz traces get <TRACE_ID>
 signoz traces errors --service checkout-svc
 signoz traces aggregate --aggregation p99 --aggregate-on durationNano --group-by "service.name"
 signoz traces fields
+signoz traces summary <TRACE_ID>     # spans, errors, duration, LLM tokens/cost (0.147+)
+signoz traces thread <TRACE_ID>      # LLM conversation view, cursor-paged (0.147+)
+signoz traces export --service checkout --error true --out errors.csv
 ```
 
 ### Metrics
@@ -184,6 +189,8 @@ signoz metrics list-keys
 signoz metrics search cpu
 signoz metrics fields --search memory
 signoz metrics field-values system_memory_usage
+signoz metrics inspect system.cpu.time   # raw data points, one row per series
+signoz metrics treemap --by timeseries   # which metrics hold the most series
 ```
 
 ### Alerts
@@ -198,6 +205,9 @@ signoz alerts history RULE_ID --cursor <nextCursor>
 signoz alerts history-stats RULE_ID
 signoz alerts overall-status RULE_ID
 signoz alerts top-contributors RULE_ID
+signoz alerts clone RULE_ID          # copy with a " - Copy" name (0.147+)
+signoz alerts route-policies list    # route alerts matching an expression to channels
+signoz alerts views list             # saved views of the rules list (0.147+)
 ```
 
 Note: `alerts history*` commands require the rule **UUID** (visible in the rule's
@@ -216,6 +226,9 @@ signoz dashboards delete UUID
 signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
 signoz dashboards diff-remote --name D --from-profile prod --to-profile staging
 signoz dashboards convert grafana.json --out signoz.json  # Grafana import (heatmaps: 0.146+)
+signoz dashboards clone UUID
+signoz dashboards lock UUID                   # block edits until `unlock`
+signoz dashboards views list                  # saved views of the dashboards list
 signoz alerts lint ./rules/*.json
 ```
 
@@ -242,6 +255,64 @@ Patch example (`patch.json`, JSON-Patch array):
 [
   { "op": "add", "path": "/tags/-", "value": { "key": "env", "value": "prod" } }
 ]
+```
+
+### Users, roles and API keys (admin)
+
+```shell
+signoz users list
+signoz users invite dev@example.com --name Dev --role viewer
+signoz users grant USER_ID editor          # role name or id
+signoz users revoke USER_ID editor
+signoz users reset-link USER_ID            # password-reset / invite link
+signoz roles list
+signoz roles users admin                   # who has a role
+signoz service-accounts keys list SA_ID
+signoz service-accounts keys create SA_ID ci --expires-in 90d   # key printed once
+signoz service-accounts keys revoke SA_ID KEY_ID
+```
+
+`users delete` needs a user's session token: SigNoz 0.147 records which user
+did the deleting, so it refuses service-account API keys.
+
+### Infrastructure
+
+```shell
+signoz infra hosts --order-by cpu:desc
+signoz infra pods --filter "k8s.namespace.name = 'prod'" --status crashloopbackoff
+signoz infra nodes            # also: deployments daemonsets statefulsets jobs namespaces clusters
+signoz infra containers
+signoz infra volumes
+signoz infra checks pods     # which required metrics/attributes are missing
+```
+
+### Health and fields
+
+```shell
+signoz health                 # exit 1 when not ready; needs only the endpoint
+signoz health --probe all     # readyz, livez, healthz
+signoz promoted-paths add user.id order.status      # fast columns for log body JSON (0.147+)
+signoz promoted-paths add http.route --signal traces
+signoz quick-filters list logs
+signoz quick-filters set logs filters.json
+```
+
+### Licensed features
+
+These need SigNoz Cloud or an enterprise license; an unlicensed server answers
+HTTP 451 (or 501 for reduction rules). Their requests follow the v0.147.0 API
+spec, but unlike everything above they could not be verified against a live
+server.
+
+```shell
+signoz dashboards share UUID --default-time-range 6h   # public link
+signoz dashboards unshare UUID
+signoz cloud accounts connect aws --deployment-region us-east-1 --region us-east-1
+signoz cloud services configure aws ACCOUNT_ID rds --logs --metrics
+signoz ingestion-keys list                              # SigNoz Cloud
+signoz ingestion-keys limits create KEY_ID --signal logs --day-size 10000000000
+signoz metrics reduction-rules preview http.server.duration --match drop --label pod
+signoz roles create role.json                           # custom roles
 ```
 
 ### Services
@@ -280,6 +351,7 @@ signoz service-accounts list         # admin only
 signoz views list                    # saved views
 signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
 signoz export ./backup -p prod       # dashboards/rules/channels/views bundle
+signoz export ./backup --include all # + route policies, rule/dashboard views, quick filters
 signoz export ./backup -p prod --encrypt  # single .enc file, safe for git
 signoz import ./backup.enc -p staging --decrypt --yes
 signoz apply ./backup -p staging --dry-run   # declarative sync preview

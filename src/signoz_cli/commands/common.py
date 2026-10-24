@@ -108,16 +108,22 @@ def _set_insecure(ctx: click.Context, param: click.Parameter, value: bool) -> No
     _INSECURE_HOLDER["value"] = value
 
 
+# These flags exist on the root group and on every leaf command. Only an
+# explicit flag sets them: the leaf's unset default must not undo a root
+# `signoz --no-input <cmd>`.
 def _set_no_input(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    _NO_INPUT_HOLDER["value"] = value
+    if value:
+        _NO_INPUT_HOLDER["value"] = True
 
 
 def _set_no_color(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    set_no_color(value)
+    if value:
+        set_no_color(True)
 
 
 def _set_no_pager(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    set_no_pager(value)
+    if value:
+        set_no_pager(True)
 
 
 def _confirm(prompt: str) -> None:

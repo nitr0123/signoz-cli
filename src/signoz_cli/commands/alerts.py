@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 
 from signoz_cli.client import SigNozApiError
+from signoz_cli.commands._crud import add_crud
 from signoz_cli.commands.common import (
     _HISTORY_TABLE_KEYS,
     _MAX_PAGES,
@@ -646,3 +647,91 @@ def alerts_diff_remote(
             click.echo("(no changes)")
     except Exception as e:
         _handle_error(e)
+
+
+@alerts.command("clone")
+@_common_options
+@click.argument("rule_id")
+def alerts_clone(endpoint: str | None, token: str | None, fmt: str,
+                 profile: str | None, rule_id: str) -> None:
+    """Copy an alert rule (SigNoz 0.147+).
+
+    The copy gets a new id and a " - Copy" name suffix; edit it with
+    `alerts update` or `alerts patch`. SigNoz 0.147 cannot clone rules
+    still in the legacy format (no thresholds); those are copied by
+    fetching the rule and creating it again.
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        try:
+            raw = client.clone_rule(rule_id)
+        except SigNozApiError as ex:
+            if ex.status_code != 400 or "threshold is nil" not in ex.message:
+                raise
+            raw = _clone_legacy_rule(client, rule_id)
+            click.echo("Note: the server cannot clone legacy-format rules; "
+                       "copied it by re-creating the rule instead.", err=True)
+        if fmt != "json" and isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+            rule = raw["data"]
+            raw = {"id": rule.get("id", ""), "alert": rule.get("alert", ""),
+                   "state": rule.get("state", ""), "disabled": rule.get("disabled", "")}
+        emit(raw, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+def _clone_legacy_rule(client, rule_id: str) -> object:
+    """Client-side clone: fetch, rename like the server would, create."""
+    from signoz_cli.inventory import _strip_volatile
+
+    src = client.get_alert(rule_id)
+    rule = src.get("data", src) if isinstance(src, dict) else src
+    if not isinstance(rule, dict):
+        raise click.UsageError(f"Could not read rule {rule_id} to copy it.")
+    body = _strip_volatile(rule)
+    body.pop("state", None)  # runtime status, not part of the definition
+    body["alert"] = f"{rule.get('alert', 'rule')} - Copy"
+    created = client.create_rule(body)
+    new = created.get("data", created) if isinstance(created, dict) else {}
+    new_id = new.get("id") if isinstance(new, dict) else None
+    return client.get_alert(new_id) if new_id else created
+
+
+@alerts.group("route-policies")
+def route_policies() -> None:
+    """Manage notification routing policies (send alerts matching an
+    expression to channels)."""
+
+
+add_crud(
+    route_policies,
+    resource="route policy",
+    list_method="list_route_policies",
+    get_method="get_route_policy",
+    create_method="create_route_policy",
+    update_method="update_route_policy",
+    delete_method="delete_route_policy",
+    columns=["id", "name", "expression", "channels", "kind"],
+    create_example='{"name": "db pages", "expression": "service.name == \'db\'", '
+                   '"channels": ["pagerduty"]}',
+)
+
+
+@alerts.group("views")
+def rule_views() -> None:
+    """Manage saved views of the alert rules list (SigNoz 0.147+)."""
+
+
+add_crud(
+    rule_views,
+    resource="alert rules view",
+    list_method="list_rule_views",
+    create_method="create_rule_view",
+    update_method="update_rule_view",
+    delete_method="delete_rule_view",
+    list_key="views",
+    columns=["id", "name", "data"],
+    create_example='{"name": "firing", "data": {"version": "v1", '
+                   '"states": ["firing"], "sort": "severity", "order": "desc"}}',
+    note="0.147+",
+)

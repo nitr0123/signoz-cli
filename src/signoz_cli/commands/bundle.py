@@ -10,12 +10,18 @@ from typing import Any
 import click
 
 from signoz_cli import __version__
+from signoz_cli.client import SigNozApiError
 from signoz_cli.commands.common import (
     _common_options,
     _confirm,
     _get_client,
     _handle_error,
     cli,
+)
+from signoz_cli.inventory import (
+    ALL_KINDS,
+    DEFAULT_KINDS,
+    NO_DELETE_KINDS,
 )
 from signoz_cli.inventory import (
     VOLATILE_KEYS as VOLATILE_KEYS,
@@ -50,8 +56,9 @@ def _safe_name(name: str) -> str:
 @_common_options
 @click.argument("directory", type=click.Path(file_okay=False))
 @click.option(
-    "--include", default="dashboards,alerts,channels,views", show_default=True,
-    help="Comma-separated kinds to export.",
+    "--include", default=",".join(DEFAULT_KINDS), show_default=True,
+    help="Comma-separated kinds to export, or 'all'. Also available: "
+         "route-policies, rule-views (0.147+), dashboard-views, quick-filters (0.141+).",
 )
 @click.option("--yes", is_flag=True, help="Write without confirming.")
 @click.option("--encrypt", is_flag=True,
@@ -62,7 +69,7 @@ def export_bundle(
     profile: str | None, directory: str, include: str, yes: bool,
     encrypt: bool,
 ) -> None:
-    """Export dashboards, alert rules, channels and views to a directory.
+    """Export dashboards, alert rules, channels, views and more to a directory.
 
     Produces <dir>/manifest.json plus one JSON file per item, suitable
     for `signoz import` into another instance (dev -> prod migration).
@@ -73,6 +80,7 @@ def export_bundle(
     Examples:
       signoz export ./backup -p prod
       signoz export ./dash-only --include dashboards
+      signoz export ./everything --include all
       signoz export ./backup -p prod --encrypt
     """
     import os
@@ -82,11 +90,14 @@ def export_bundle(
     tmpdir: str | None = None
     try:
         kinds = [k.strip() for k in include.split(",") if k.strip()]
+        include_all = kinds == ["all"]
+        if include_all:
+            kinds = list(ALL_KINDS)
         for kind in kinds:
-            if kind not in ("dashboards", "alerts", "channels", "views"):
+            if kind not in ALL_KINDS:
                 raise click.UsageError(
                     f"Unknown kind '{kind}'. "
-                    "Choose from: dashboards, alerts, channels, views."
+                    f"Choose from: {', '.join(ALL_KINDS)} (or 'all')."
                 )
         client = _get_client(endpoint, token, profile)
         try:
@@ -104,7 +115,7 @@ def export_bundle(
             "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "counts": {},
         }
-        summary = []
+        summary: list[dict[str, Any]] = []
         workdir = directory
         if encrypt:
             # Export plaintext into a temp dir first; pack + encrypt at
@@ -112,7 +123,16 @@ def export_bundle(
             tmpdir = tempfile.mkdtemp(prefix="signoz-export-")
             workdir = tmpdir
         for kind in kinds:
-            items = _list_items(client, kind)
+            try:
+                items = _list_items(client, kind)
+            except SigNozApiError as ex:
+                if not include_all:
+                    raise
+                # 'all' includes kinds newer than some servers: skip, don't abort.
+                click.echo(f"Warning: skipping {kind}: {ex.message} "
+                           f"(HTTP {ex.status_code})", err=True)
+                summary.append({"kind": kind, "exported": "skipped"})
+                continue
             kind_dir = os.path.join(workdir, kind)
             os.makedirs(kind_dir, exist_ok=True)
             saved = 0
@@ -253,7 +273,7 @@ def import_bundle(
                 "encrypted <name>.enc files).")
         client = _get_client(endpoint, token, profile)
         kinds = [
-            k for k in ("channels", "views", "dashboards", "alerts")
+            k for k in ALL_KINDS
             if os.path.isdir(os.path.join(directory, k))
         ]
         if not kinds:
@@ -328,6 +348,25 @@ def _normalize_dashboard(doc: dict[str, Any]) -> dict[str, Any]:
     return doc
 
 
+def _channel_body(doc: dict[str, Any]) -> dict[str, Any]:
+    """The receiver object the v1 channel create/update API expects.
+
+    `channels get` (and so every export) returns the receiver config as a
+    JSON *string* under "data"; posting that envelope back is rejected
+    ("must have at least one notification configuration"). Unpack it;
+    hand-written bundle files that already hold the receiver pass through.
+    """
+    data = doc.get("data")
+    if isinstance(data, str):
+        try:
+            receiver = json.loads(data)
+        except ValueError:
+            receiver = None
+        if isinstance(receiver, dict) and receiver.get("name"):
+            return receiver
+    return _strip_volatile(doc)
+
+
 def _create(client, kind: str, doc: dict[str, Any]) -> None:
     """Create one bundle item on the target instance."""
     if not isinstance(doc, dict):
@@ -340,9 +379,25 @@ def _create(client, kind: str, doc: dict[str, Any]) -> None:
     elif kind == "alerts":
         client.create_rule(body)
     elif kind == "channels":
-        client.create_channel(body)
+        client.create_channel(_channel_body(doc))
     elif kind == "views":
         client.create_saved_view(body)
+    elif kind == "route-policies":
+        client.create_route_policy(body)
+    elif kind == "rule-views":
+        client.create_rule_view(body)
+    elif kind == "dashboard-views":
+        client.create_dashboard_view(body)
+    elif kind == "quick-filters":
+        _set_quick_filters(client, body)
+
+
+def _set_quick_filters(client, body: dict[str, Any]) -> None:
+    """Quick filters are keyed by source and replaced whole (no create/delete)."""
+    source = body.get("source")
+    if not source:
+        raise click.UsageError("quick-filters bundle file is missing 'source'.")
+    client.set_quick_filters(source, body.get("filters") or [])
 
 
 def _overwrite(
@@ -357,7 +412,15 @@ def _overwrite(
     elif kind == "alerts":
         client.update_rule(clash.get("id", ""), body)
     elif kind == "channels":
-        client.update_channel(clash.get("id", ""), body)
+        client.update_channel(clash.get("id", ""), _channel_body(doc))
+    elif kind == "route-policies":
+        client.update_route_policy(clash.get("id", ""), body)
+    elif kind == "rule-views":
+        client.update_rule_view(clash.get("id", ""), body)
+    elif kind == "dashboard-views":
+        client.update_dashboard_view(clash.get("id", ""), body)
+    elif kind == "quick-filters":
+        _set_quick_filters(client, body)
     elif kind == "views":
         clash_id = clash.get("id", "")
         # No update API: delete + recreate. Recreate can fail after the
@@ -421,6 +484,12 @@ def _delete_item(client, kind: str, item_id: str) -> None:
         client.delete_channel(item_id)
     elif kind == "views":
         client.delete_saved_view(item_id)
+    elif kind == "route-policies":
+        client.delete_route_policy(item_id)
+    elif kind == "rule-views":
+        client.delete_rule_view(item_id)
+    elif kind == "dashboard-views":
+        client.delete_dashboard_view(item_id)
     else:  # pragma: no cover - guarded by kind discovery
         raise click.UsageError(f"Unknown bundle kind '{kind}'.")
 
@@ -492,7 +561,7 @@ def apply_bundle(
     try:
         client = _get_client(endpoint, token, profile)
         kinds = [
-            k for k in ("channels", "views", "dashboards", "alerts")
+            k for k in ALL_KINDS
             if _os.path.isdir(_os.path.join(directory, k))
         ]
         if not kinds:
@@ -557,6 +626,11 @@ def apply_bundle(
             for kind in kinds:
                 for name, item in sorted(existing[kind].items()):
                     if name in wanted_names[kind]:
+                        continue
+                    if kind in NO_DELETE_KINDS:
+                        report.append({"kind": kind, "name": name,
+                                       "action": "skipped",
+                                       "detail": "cannot be deleted"})
                         continue
                     item_id = item.get("id", "") if isinstance(item, dict) else ""
                     if not item_id:

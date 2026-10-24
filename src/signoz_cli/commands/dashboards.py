@@ -6,6 +6,8 @@ from typing import Any
 
 import click
 
+from signoz_cli.client import SigNozApiError
+from signoz_cli.commands._crud import add_crud
 from signoz_cli.commands.common import (
     _MAX_PAGES,
     _common_options,
@@ -339,3 +341,145 @@ def dashboards_convert(json_file: str, out_path: str | None, fmt: str) -> None:
             emit(converted, fmt)
     except Exception as e:
         _handle_error(e)
+
+
+@dashboards.command("clone")
+@_common_options
+@click.argument("dashboard_id")
+def dashboards_clone(endpoint: str | None, token: str | None, fmt: str,
+                     profile: str | None, dashboard_id: str) -> None:
+    """Copy a dashboard server-side (name gets a " - Copy" suffix)."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.clone_dashboard_v2(dashboard_id)
+        if fmt != "json" and isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+            raw = _dashboard_summary(raw["data"])
+        emit(raw, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@dashboards.command("lock")
+@_common_options
+@click.argument("dashboard_id")
+def dashboards_lock(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, dashboard_id: str) -> None:
+    """Lock a dashboard so it cannot be edited until unlocked."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        client.lock_dashboard_v2(dashboard_id)
+        emit({"id": dashboard_id, "locked": True}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@dashboards.command("unlock")
+@_common_options
+@click.argument("dashboard_id")
+def dashboards_unlock(endpoint: str | None, token: str | None, fmt: str,
+                      profile: str | None, dashboard_id: str) -> None:
+    """Unlock a locked dashboard."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        client.unlock_dashboard_v2(dashboard_id)
+        emit({"id": dashboard_id, "locked": False}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+def _public_info(client: Any, dashboard_id: str) -> dict[str, Any]:
+    raw = client.get_public_dashboard(dashboard_id)
+    info = raw.get("data", raw) if isinstance(raw, dict) else {}
+    info = dict(info) if isinstance(info, dict) else {}
+    path = info.get("publicPath", "")
+    if isinstance(path, str) and path.startswith("/"):
+        info["url"] = f"{client.endpoint}{path}"
+    return info
+
+
+@dashboards.command("share")
+@_common_options
+@click.argument("dashboard_id")
+@click.option("--time-range-picker/--no-time-range-picker", default=True,
+              show_default=True,
+              help="Let viewers of the public link change the time range.")
+@click.option("--default-time-range", default="30m", show_default=True,
+              help="Time range the public link opens with (e.g. 30m, 6h, 7d).")
+def dashboards_share(endpoint: str | None, token: str | None, fmt: str,
+                     profile: str | None, dashboard_id: str,
+                     time_range_picker: bool, default_time_range: str) -> None:
+    """Publish a dashboard at a public link anyone can open without logging in.
+
+    Updates the settings when the dashboard is already shared. Prints the
+    public URL. Undo with `dashboards unshare`. Needs SigNoz Cloud or an
+    enterprise license (unlicensed servers answer HTTP 451).
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        try:
+            _public_info(client, dashboard_id)
+            shared = True
+        except SigNozApiError as ex:
+            if ex.status_code != 404:
+                raise
+            shared = False
+        if shared:
+            client.update_public_dashboard(dashboard_id, time_range_picker,
+                                           default_time_range)
+        else:
+            client.create_public_dashboard(dashboard_id, time_range_picker,
+                                           default_time_range)
+        info = _public_info(client, dashboard_id)
+        info["action"] = "updated" if shared else "shared"
+        emit(info, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@dashboards.command("share-info")
+@_common_options
+@click.argument("dashboard_id")
+def dashboards_share_info(endpoint: str | None, token: str | None, fmt: str,
+                          profile: str | None, dashboard_id: str) -> None:
+    """Show a dashboard's public link and settings (404 when not shared)."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(_public_info(client, dashboard_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@dashboards.command("unshare")
+@_common_options
+@click.argument("dashboard_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+def dashboards_unshare(endpoint: str | None, token: str | None, fmt: str,
+                       profile: str | None, dashboard_id: str, yes: bool) -> None:
+    """Remove a dashboard's public link (the old URL stops working)."""
+    try:
+        if not yes:
+            _confirm(f"Remove the public link of dashboard {dashboard_id}?")
+        client = _get_client(endpoint, token, profile)
+        client.delete_public_dashboard(dashboard_id)
+        emit({"id": dashboard_id, "public": False}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@dashboards.group("views")
+def dashboard_views() -> None:
+    """Manage saved views of the dashboards list (search, sort, order)."""
+
+
+add_crud(
+    dashboard_views,
+    resource="dashboards list view",
+    list_method="list_dashboard_views",
+    create_method="create_dashboard_view",
+    update_method="update_dashboard_view",
+    delete_method="delete_dashboard_view",
+    list_key="views",
+    columns=["id", "name", "data"],
+    create_example='{"name": "recent", "data": {"version": "v1", '
+                   '"sort": "updated_at", "order": "desc"}}',
+)

@@ -7,6 +7,7 @@ from collections import OrderedDict
 import click
 
 from signoz_cli.client import SigNozApiError
+from signoz_cli.commands._export import export_options, run_export
 from signoz_cli.commands.common import (
     _NO_FIELD_AGGREGATIONS,
     _TRACE_TABLE_KEYS,
@@ -511,3 +512,126 @@ def traces_tail(
             _time.sleep(interval)
     except KeyboardInterrupt:
         click.echo("Stopped.", err=True)
+
+
+@traces.command("summary")
+@_common_options
+@click.argument("trace_id")
+def traces_summary(endpoint: str | None, token: str | None, fmt: str,
+                   profile: str | None, trace_id: str) -> None:
+    """One-line overview of a trace: root service, span/error counts,
+    duration, and LLM token usage and cost (SigNoz 0.147+)."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.get_trace_summary(trace_id)
+        if fmt == "json":
+            emit(raw, fmt)
+            return
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        start_ms = data.get("startTimestampMillis") or 0
+        end_ms = data.get("endTimestampMillis") or 0
+        row = {
+            "traceID": trace_id,
+            "rootService": data.get("rootServiceName", ""),
+            "entryPoint": data.get("rootServiceEntryPoint", ""),
+            "status": data.get("rootSpanStatusCode", ""),
+            "spans": data.get("totalSpansCount", 0),
+            "errorSpans": data.get("totalErrorSpansCount", 0),
+            "durationMs": max(0, end_ms - start_ms),
+            "missingSpans": data.get("hasMissingSpans", False),
+        }
+        ai = data.get("ai")
+        if isinstance(ai, dict):
+            tokens = ai.get("tokens") or {}
+            row["inputTokens"] = tokens.get("input", 0)
+            row["outputTokens"] = tokens.get("output", 0)
+            row["totalCost"] = ai.get("totalCost", "")
+        if fmt == "table":
+            # Too many columns for one row: show it as field/value pairs.
+            emit({"data": [{"field": k, "value": v} for k, v in row.items()]}, fmt)
+        else:
+            emit({"data": [row]}, fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
+@traces.command("thread")
+@_common_options
+@click.argument("trace_id")
+@click.option("--limit", type=int, default=None, help="Spans per page (server default if unset).")
+@click.option("--after", default="", help="Cursor from a previous page (nextCursor).")
+@click.option("--before", default="", help="Cursor from a previous page (prevCursor).")
+@click.option("--span", "span_id", default="", help="Center the page on this span id.")
+def traces_thread(endpoint: str | None, token: str | None, fmt: str,
+                  profile: str | None, trace_id: str, limit: int | None,
+                  after: str, before: str, span_id: str) -> None:
+    """Conversation view of an LLM trace: spans in order with their parsed
+    input/output messages (SigNoz 0.147+).
+
+    Table mode shows one row per span; --format json includes the
+    formatted messages. Cursors for the next/previous page go to stderr.
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.get_trace_thread(trace_id, limit=limit, after=after,
+                                      before=before, span_id=span_id)
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        if fmt != "json":
+            rows = []
+            for s in data.get("spans") or []:
+                if not isinstance(s, dict):
+                    continue
+                res = s.get("resource") or {}
+                rows.append({
+                    "spanID": s.get("span_id", ""),
+                    "service": res.get("service.name", "") if isinstance(res, dict) else "",
+                    "name": s.get("name", ""),
+                    "kind": s.get("kind_string", ""),
+                    "durationMs": round((s.get("duration_nano") or 0) / 1e6, 2),
+                    "error": s.get("has_error", False),
+                })
+            emit({"data": rows}, fmt)
+        else:
+            emit(raw, fmt)
+        for label, key in (("next", "nextCursor"), ("previous", "prevCursor")):
+            if data.get(key):
+                flag = "--after" if key == "nextCursor" else "--before"
+                click.echo(f"{label} page: {flag} {_safe_plain(data[key])}", err=True)
+    except Exception as e:
+        _handle_error(e)
+
+
+@traces.command("export")
+@_common_options
+@click.option("--query", default=None, help="Filter expression (SigNoz search syntax).")
+@click.option("--service", default=None, help="Service name filter.")
+@click.option("--operation", default=None, help="Operation name filter.")
+@click.option("--error", "error_filter", type=click.Choice(["true", "false"]), default=None,
+              help="Filter by error status.")
+@click.option("--min-duration", type=int, default=None, help="Minimum duration in ns.")
+@_time_options(default_range="6h")
+@export_options
+def traces_export(endpoint: str | None, token: str | None, fmt: str, profile: str | None,
+                  query: str | None, service: str | None, operation: str | None,
+                  error_filter: str | None, min_duration: int | None,
+                  time_range: str | None, start: int | None, end: int | None,
+                  out_path: str, as_fmt: str | None, limit: int) -> None:
+    """Download matching spans, all fields, to a CSV or JSONL file.
+
+    \b
+    Example:
+      signoz traces export --service checkout --error true --out errors.csv
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        filter_expr = _build_trace_filter(query, service, operation, error_filter)
+        if min_duration is not None:
+            filter_expr = _append_filter(filter_expr, f"durationNano >= {min_duration}")
+        s, e = resolve_timestamps(start, end, time_range, default_range="6h",
+                                  profile_time_range=_profile_time_range(profile))
+        run_export(client, build_traces_query_payload(s, e, filter_expr), out_path,
+                   as_fmt, limit)
+    except Exception as ex:
+        _handle_error(ex)
