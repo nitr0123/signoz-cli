@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,8 +17,8 @@ jobs:
     name: Lint (ruff + mypy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -33,10 +36,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -44,12 +47,31 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  lowest-deps:
+    name: Tests (lowest declared dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.10"
+      - name: Install runtime dependencies at their declared floors
+        # lowest-direct: only our own dependencies are pinned to their
+        # minimums, so the floors in pyproject.toml stay honest.
+        run: |
+          pip install uv
+          uv pip install --system --resolution lowest-direct -e .
+          pip install pytest hypothesis opentelemetry-sdk opentelemetry-exporter-otlp
+          pip list
+      - name: Run tests
+        run: python -m pytest -q
+
   package:
     name: Package build check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Build sdist and wheel

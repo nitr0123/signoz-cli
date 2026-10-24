@@ -1,9 +1,12 @@
 name: Bump version
 
-# Merge to main -> semver patch bump -> push tag -> call the Release workflow.
+# Merge to main -> semver patch bump -> push tag -> dispatch the Release workflow.
 #
-# Release is invoked directly (workflow_call) rather than via the tag push:
-# pushes made with GITHUB_TOKEN deliberately do not trigger other workflows.
+# Release is dispatched explicitly rather than relying on the tag push:
+# pushes made with GITHUB_TOKEN deliberately do not trigger other workflows,
+# but workflow_dispatch is exempt. Dispatching (instead of workflow_call)
+# keeps release.yml the top-level workflow, which PyPI trusted publishing
+# matches against.
 # The same rule means the bump commit itself starts no new runs; the
 # "Skip if version bump commit" guard stays as a belt-and-braces loop stop.
 # cancel-in-progress: false guarantees the bump itself is never
@@ -17,16 +20,15 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
   bump:
     name: Semver patch bump + tag
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -41,7 +43,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute next semver patch
+      - name: Compute next version
         if: steps.check.outputs.skip != 'true'
         id: version
         run: |
@@ -54,14 +56,19 @@ jobs:
           MAJOR=$(echo "$TAG_NUM" | cut -d. -f1)
           MINOR=$(echo "$TAG_NUM" | cut -d. -f2)
           PATCH=$(echo "$TAG_NUM" | cut -d. -f3)
-          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           NEXT_NUM="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          # A version hand-bumped past the latest tag in the PR (minor or
+          # major release) wins over the automatic patch bump.
+          PKG=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PKG" != "$TAG_NUM" ] && [ "$(printf '%s\n%s\n' "$TAG_NUM" "$PKG" | sort -V | tail -n1)" = "$PKG" ]; then
+            NEXT_NUM="$PKG"
+          fi
+          NEXT="v${NEXT_NUM}"
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "next_num=$NEXT_NUM" >> "$GITHUB_OUTPUT"
           echo "Latest tag: $LATEST -> Next: $NEXT"
 
       - name: Bump version, commit and tag
-        id: tag
         if: steps.check.outputs.skip != 'true'
         run: |
           NEXT="${{ steps.version.outputs.next }}"
@@ -84,12 +91,9 @@ jobs:
             git tag "$NEXT"
             git push origin "$NEXT"
           fi
-          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Release
-    needs: bump
-    if: needs.bump.outputs.tag != ''
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: ${{ needs.bump.outputs.tag }}
+      - name: Dispatch release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref main -f tag="${{ steps.version.outputs.next }}"

@@ -40,11 +40,14 @@ merge commits (no fast-forward), so history shows clear units of change.
 GitHub Actions (`.github/workflows/ci.yml`) runs on pushes to `main` and all
 PRs:
 
-- **lint** — `ruff check .`
-- **test** — `pytest -q` on Python 3.10 / 3.11 / 3.12
-- **package** — builds sdist+wheel and validates them with `twine check`
+- **lint**: `ruff check .`, `bash -n install.sh`, `mypy src/signoz_cli/`
+- **test**: `pytest -q` on Python 3.10 through 3.14
+- **lowest-deps**: `pytest -q` with every runtime dependency at the floor
+  declared in `pyproject.toml`; raise a floor rather than let this fail
+- **package**: builds sdist+wheel and validates them with `twine check`
 
-A PR is only mergeable when all three jobs pass.
+A PR is only mergeable when all jobs pass. Dependabot opens weekly grouped
+PRs for Actions and pip dependencies; Actions are pinned to commit SHAs.
 
 ## Tests
 
@@ -54,13 +57,18 @@ HTTP interactions are covered with `httpx.MockTransport`, and CLI flows with
 
 ## Releasing
 
-1. Bump `version` in `pyproject.toml` and `__version__` in `src/signoz_cli/__init__.py`.
-2. Add a CHANGELOG entry.
-3. Merge to `main`, then create and push the tag **in its own push**:
+Releases are automatic. Every merge to `main` runs the **Bump version**
+workflow, which bumps the patch version in `pyproject.toml` and
+`src/signoz_cli/__init__.py`, commits, tags `vX.Y.Z`, and dispatches the
+**Release** workflow. That builds the sdist and wheel, smoke-tests the
+install, and publishes a GitHub Release with both attached (and, once the
+`PYPI_PUBLISH` repo variable is `true`, uploads them to PyPI via trusted
+publishing).
 
-   ```shell
-   git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z
-   ```
+So before merging, add the change to the `## Unreleased` section of
+`CHANGELOG.md`.
 
-CI then builds the wheel/sdist, smoke-tests the install, and attaches the
-artifacts to a GitHub Release (uses the built-in `GITHUB_TOKEN`).
+For a minor or major release, set both version files to `X.Y.0` in the
+PR: when that version is ahead of the latest tag, the workflow tags it
+instead of a patch bump. To re-run a release for an existing tag, use
+**Actions → Release → Run workflow** with the tag name.
