@@ -29,7 +29,8 @@ def channels() -> None:
 @click.option("--query", default=None, help="v2 only: case-insensitive name search.")
 @click.option("--kind", default=None,
               help="v2 only: kind filter (slack, email, webhook, pagerduty, "
-                   "opsgenie, msteams, googlechat, jira, jsmops, incidentio).")
+                   "opsgenie, msteams, googlechat, jira, jsmops, incidentio, "
+                   "telegram).")
 @click.option("--limit", type=int, default=None, help="v2 only: page size.")
 @click.option("--offset", type=int, default=None, help="v2 only: page offset.")
 def channels_list(endpoint: str | None, token: str | None, fmt: str,

@@ -14,6 +14,21 @@
 - SigNoz 0.144+ APIs: `alerts rules` (server-side filter/sort/page via
   `/api/v3/rules`), `traces flamegraph`, `alerts history-fields`
   (history filter key/value discovery). Older servers fail cleanly.
+- SigNoz 0.147 support, verified live against v0.147.0: Grafana `heatmap`
+  panels convert to `signoz/HeatmapPanel` (0.146+), and `channels list
+  --kind` documents the new `telegram` kind.
+
+### Fixed
+
+- `traces flamegraph` sends the POST the server expects; it previously
+  sent a GET, which every 0.144+ server answers with the web UI page.
+- `ai pricing-rules create` uses the server's bulk upsert (`PUT`, one
+  rule, a list, or a `{"rules": [...]}` body) instead of an unsupported
+  POST. Existing rules are never replaced.
+- `service-accounts create --role` assigns the role through
+  `/api/v1/service_account_roles`; the old per-account route was removed
+  in SigNoz 0.140, so on 0.140+ the account was created without its role
+  (and the CLI reported the assignment as failed).
 
 ### Changed
 
@@ -21,6 +36,8 @@
   `signoz update`, `install.sh` and the README install from GitHub over
   HTTPS (no SSH or registry token needed); releases are GitHub Releases.
   `SIGNOZ_PYPI_INDEX` still works for installs from a custom package index.
+- The README states that the project is entirely AI-generated, and its
+  pinned install examples now track each release automatically.
 - CI also tests Python 3.13 and 3.14; Actions are pinned to commit SHAs
   and kept current by Dependabot.
 - Requires click 8.3 or newer: the previous `>=8.1` floor was never

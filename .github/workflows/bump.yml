@@ -64,6 +64,7 @@ jobs:
             NEXT_NUM="$PKG"
           fi
           NEXT="v${NEXT_NUM}"
+          echo "latest_num=$TAG_NUM" >> "$GITHUB_OUTPUT"
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "next_num=$NEXT_NUM" >> "$GITHUB_OUTPUT"
           echo "Latest tag: $LATEST -> Next: $NEXT"
@@ -76,9 +77,12 @@ jobs:
           echo "Bumping to $NEXT"
           sed -i "s/^version = .*/version = \"$NEXT_NUM\"/" pyproject.toml
           sed -i "s/^__version__ = .*/__version__ = \"$NEXT_NUM\"/" src/signoz_cli/__init__.py
+          # Keep the README's pinned install examples on the release being cut.
+          LATEST_NUM="${{ steps.version.outputs.latest_num }}"
+          sed -i "s/${LATEST_NUM//./\\.}/$NEXT_NUM/g" README.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml src/signoz_cli/__init__.py
+          git add pyproject.toml src/signoz_cli/__init__.py README.md
           if git diff --cached --quiet; then
             echo "Version files already at $NEXT_NUM, skipping commit."
           else

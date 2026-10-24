@@ -7,7 +7,13 @@
 
 A command-line tool for querying traces, logs, metrics, alerts, dashboards, and services from [SigNoz](https://signoz.io/).
 
-**Supported SigNoz versions:** `>= 0.136` — verified live against **v0.136.1** and **v0.138.0**.
+> [!NOTE]
+> **This project is entirely AI-generated.** All of the code, tests and
+> documentation were written by an AI coding assistant (Claude). Review
+> it as you would any third-party tool before using it against
+> production systems.
+
+**Supported SigNoz versions:** `>= 0.136` — verified live against **v0.136.1**, **v0.138.0** and **v0.147.0** (latest).
 `signoz auth verify` reports your server's version and whether it is in the tested range.
 
 Built for the current SigNoz API surface:
@@ -30,9 +36,9 @@ Requires Python 3.10+.
 Install a pinned release tag with pipx:
 
 ```shell
-pipx install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.43"
+pipx install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.45"
 # or plain pip:
-pip install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.43"
+pip install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.45"
 ```
 
 ### Helper script
@@ -42,7 +48,7 @@ a pip fallback, and verifies with `signoz --version`:
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/nitr0123/signoz-cli/main/install.sh | sh
-sh install.sh v0.5.43      # pinned, from a clone
+sh install.sh v0.5.45      # pinned, from a clone
 ```
 
 Set `SIGNOZ_PYPI_INDEX` to install from a PyPI-compatible package index
@@ -51,7 +57,7 @@ instead of git.
 ### From a release wheel
 
 ```shell
-pip install "https://github.com/nitr0123/signoz-cli/releases/download/v0.5.43/signoz_cli-0.5.43-py3-none-any.whl"
+pip install "https://github.com/nitr0123/signoz-cli/releases/download/v0.5.45/signoz_cli-0.5.45-py3-none-any.whl"
 ```
 
 ### From source
@@ -64,7 +70,7 @@ pip install .
 pip install -e '.[dev]'
 ```
 
-Tags are immutable — `@v0.5.43` always gives you exactly the v0.5.43 build.
+Tags are immutable — `@v0.5.45` always gives you exactly the v0.5.45 build.
 See [releases](https://github.com/nitr0123/signoz-cli/releases) for available versions.
 
 ## Updating
@@ -209,7 +215,7 @@ signoz dashboards patch UUID patch.json       # JSON-Patch array
 signoz dashboards delete UUID
 signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
 signoz dashboards diff-remote --name D --from-profile prod --to-profile staging
-signoz dashboards convert grafana.json --out signoz.json  # Grafana import
+signoz dashboards convert grafana.json --out signoz.json  # Grafana import (heatmaps: 0.146+)
 signoz alerts lint ./rules/*.json
 ```
 
