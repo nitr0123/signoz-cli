@@ -657,6 +657,449 @@ class SigNozClient:
     def list_roles(self) -> Any:
         return self._get("/api/v1/roles")
 
+    def list_service_account_keys(self, account_id: str) -> Any:
+        return self._get(f"/api/v1/service_accounts/{account_id}/keys")
+
+    def create_service_account_key(
+        self, account_id: str, name: str, expires_at: int = 0
+    ) -> Any:
+        """POST /api/v1/service_accounts/{id}/keys; expiresAt is unix seconds, 0 = never.
+
+        The response is the only time the key value is returned.
+        """
+        return self._post(f"/api/v1/service_accounts/{account_id}/keys",
+                          json_body={"name": name, "expiresAt": expires_at},
+                          idempotent=False)
+
+    def update_service_account_key(
+        self, account_id: str, key_id: str, name: str, expires_at: int = 0
+    ) -> Any:
+        return self._send("PUT", f"/api/v1/service_accounts/{account_id}/keys/{key_id}",
+                          json_body={"name": name, "expiresAt": expires_at})
+
+    def revoke_service_account_key(self, account_id: str, key_id: str) -> Any:
+        return self._send("DELETE", f"/api/v1/service_accounts/{account_id}/keys/{key_id}")
+
+    # ------------------------------------------------------------------
+    # Users and roles (admin, v2 users API)
+    # ------------------------------------------------------------------
+
+    def list_users(self) -> Any:
+        return self._get("/api/v2/users")
+
+    def get_user(self, user_id: str) -> Any:
+        """GET /api/v2/users/{id} — includes userRoles (with their ids)."""
+        return self._get(f"/api/v2/users/{user_id}")
+
+    def get_me(self) -> Any:
+        return self._get("/api/v2/users/me")
+
+    def invite_user(
+        self, email: str, display_name: str = "", role_ids: list[str] | None = None,
+        frontend_base_url: str = "",
+    ) -> Any:
+        body: dict[str, Any] = {"email": email}
+        if display_name:
+            body["displayName"] = display_name
+        if role_ids:
+            body["userRoles"] = [{"id": rid} for rid in role_ids]
+        if frontend_base_url:
+            body["frontendBaseUrl"] = frontend_base_url
+        return self._post("/api/v2/users", json_body=body, idempotent=False)
+
+    def update_user(self, user_id: str, display_name: str) -> Any:
+        return self._send("PUT", f"/api/v2/users/{user_id}",
+                          json_body={"displayName": display_name})
+
+    def delete_user(self, user_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/users/{user_id}")
+
+    def get_user_roles(self, user_id: str) -> Any:
+        return self._get(f"/api/v2/users/{user_id}/roles")
+
+    def assign_user_role(self, user_id: str, role_id: str) -> Any:
+        return self._post("/api/v2/user_roles",
+                          json_body={"userId": user_id, "roleId": role_id},
+                          idempotent=False)
+
+    def delete_user_role(self, user_role_id: str) -> Any:
+        """DELETE /api/v2/user_roles/{id} — the id of the assignment, not the role."""
+        return self._send("DELETE", f"/api/v2/user_roles/{user_role_id}")
+
+    def get_reset_password_token(self, user_id: str) -> Any:
+        return self._get(f"/api/v2/users/{user_id}/reset_password_tokens")
+
+    def create_reset_password_token(self, user_id: str) -> Any:
+        """PUT creates or regenerates the token (old links stop working)."""
+        return self._send("PUT", f"/api/v2/users/{user_id}/reset_password_tokens",
+                          idempotent=False)
+
+    def get_role(self, role_id: str) -> Any:
+        return self._get(f"/api/v1/roles/{role_id}")
+
+    def create_role(self, role: dict[str, Any]) -> Any:
+        return self._post("/api/v1/roles", json_body=role, idempotent=False)
+
+    def update_role(self, role_id: str, role: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v1/roles/{role_id}", json_body=role)
+
+    def delete_role(self, role_id: str) -> Any:
+        return self._send("DELETE", f"/api/v1/roles/{role_id}")
+
+    def list_role_users(self, role_id: str) -> Any:
+        return self._get(f"/api/v2/roles/{role_id}/users")
+
+    # ------------------------------------------------------------------
+    # Clone / lock / public sharing
+    # ------------------------------------------------------------------
+
+    def clone_rule(self, rule_id: str) -> Any:
+        """POST /api/v2/rules/{id}/clone (SigNoz 0.147+)."""
+        return self._post(f"/api/v2/rules/{rule_id}/clone", idempotent=False)
+
+    def clone_dashboard_v2(self, dashboard_id: str) -> Any:
+        return self._post(f"/api/v2/dashboards/{dashboard_id}/clone", idempotent=False)
+
+    def lock_dashboard_v2(self, dashboard_id: str) -> Any:
+        return self._send("PUT", f"/api/v2/dashboards/{dashboard_id}/lock")
+
+    def unlock_dashboard_v2(self, dashboard_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/dashboards/{dashboard_id}/lock")
+
+    def get_public_dashboard(self, dashboard_id: str) -> Any:
+        return self._get(f"/api/v1/dashboards/{dashboard_id}/public")
+
+    def create_public_dashboard(
+        self, dashboard_id: str, time_range_enabled: bool, default_time_range: str
+    ) -> Any:
+        return self._post(f"/api/v1/dashboards/{dashboard_id}/public",
+                          json_body={"timeRangeEnabled": time_range_enabled,
+                                     "defaultTimeRange": default_time_range},
+                          idempotent=False)
+
+    def update_public_dashboard(
+        self, dashboard_id: str, time_range_enabled: bool, default_time_range: str
+    ) -> Any:
+        return self._send("PUT", f"/api/v1/dashboards/{dashboard_id}/public",
+                          json_body={"timeRangeEnabled": time_range_enabled,
+                                     "defaultTimeRange": default_time_range})
+
+    def delete_public_dashboard(self, dashboard_id: str) -> Any:
+        return self._send("DELETE", f"/api/v1/dashboards/{dashboard_id}/public")
+
+    # ------------------------------------------------------------------
+    # Trace summary / thread (0.147+)
+    # ------------------------------------------------------------------
+
+    def get_trace_summary(self, trace_id: str) -> Any:
+        return self._get(f"/api/v1/traces/{trace_id}/summary")
+
+    def get_trace_thread(
+        self, trace_id: str, limit: int | None = None, after: str = "",
+        before: str = "", span_id: str = "",
+    ) -> Any:
+        params: dict[str, str] = {}
+        if limit:
+            params["limit"] = str(limit)
+        if after:
+            params["after"] = after
+        if before:
+            params["before"] = before
+        if span_id:
+            params["spanId"] = span_id
+        return self._get(f"/api/v1/traces/{trace_id}/thread", params=params or None)
+
+    # ------------------------------------------------------------------
+    # Health (unauthenticated probes)
+    # ------------------------------------------------------------------
+
+    def get_health(self, probe: str = "readyz") -> tuple[int, Any]:
+        """GET /api/v2/{healthz,livez,readyz}; returns (status_code, body).
+
+        An unhealthy server answers 503 with the same body, so this does
+        not raise on error statuses: the caller decides from both.
+        """
+        if probe not in ("healthz", "livez", "readyz"):
+            raise ValueError(f"unknown probe {probe!r}")
+        resp = self._request("GET", f"/api/v2/{probe}")
+        try:
+            body = resp.json()
+        except ValueError:
+            if resp.is_error:
+                raise SigNozApiError(resp.status_code, _extract_error(resp)) from None
+            raise SigNozApiError(
+                resp.status_code,
+                "unexpected non-JSON response; this API may not exist on the server version",
+            ) from None
+        return resp.status_code, body
+
+    # ------------------------------------------------------------------
+    # Infra monitoring
+    # ------------------------------------------------------------------
+
+    def list_infra(self, kind: str, payload: dict[str, Any]) -> Any:
+        """POST /api/v2/infra_monitoring/{kind} (hosts, pods, nodes, ...)."""
+        return self._post(f"/api/v2/infra_monitoring/{kind}", json_body=payload)
+
+    def get_infra_checks(self, check_type: str) -> Any:
+        return self._get("/api/v2/infra_monitoring/checks", params={"type": check_type})
+
+    # ------------------------------------------------------------------
+    # Ingestion keys and limits (SigNoz Cloud gateway)
+    # ------------------------------------------------------------------
+
+    def list_ingestion_keys(self, page: int = 1, per_page: int = 50, name: str = "") -> Any:
+        params = {"page": str(page), "per_page": str(per_page)}
+        if name:
+            params["name"] = name
+            return self._get("/api/v2/gateway/ingestion_keys/search", params=params)
+        return self._get("/api/v2/gateway/ingestion_keys", params=params)
+
+    def get_ingestion_key(self, key_id: str) -> Any:
+        return self._get(f"/api/v2/gateway/ingestion_keys/{key_id}")
+
+    def create_ingestion_key(self, key: dict[str, Any]) -> Any:
+        return self._post("/api/v2/gateway/ingestion_keys", json_body=key, idempotent=False)
+
+    def update_ingestion_key(self, key_id: str, key: dict[str, Any]) -> Any:
+        return self._send("PATCH", f"/api/v2/gateway/ingestion_keys/{key_id}", json_body=key)
+
+    def delete_ingestion_key(self, key_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/gateway/ingestion_keys/{key_id}")
+
+    def list_ingestion_key_limits(self, key_id: str) -> Any:
+        return self._get(f"/api/v2/gateway/ingestion_keys/{key_id}/limits")
+
+    def create_ingestion_limit(self, limit: dict[str, Any]) -> Any:
+        """POST /api/v2/gateway/ingestion_limits (body carries keyId; 0.141+)."""
+        return self._post("/api/v2/gateway/ingestion_limits", json_body=limit,
+                          idempotent=False)
+
+    def get_ingestion_limit(self, limit_id: str) -> Any:
+        return self._get(f"/api/v2/gateway/ingestion_limits/{limit_id}")
+
+    def update_ingestion_limit(self, limit_id: str, limit: dict[str, Any]) -> Any:
+        return self._send("PATCH", f"/api/v2/gateway/ingestion_limits/{limit_id}",
+                          json_body=limit)
+
+    def delete_ingestion_limit(self, limit_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/gateway/ingestion_limits/{limit_id}")
+
+    # ------------------------------------------------------------------
+    # Metrics explorer and reduction rules
+    # ------------------------------------------------------------------
+
+    def inspect_metric(
+        self, metric_name: str, start: int, end: int, filter_expression: str = ""
+    ) -> Any:
+        body: dict[str, Any] = {"metricName": metric_name, "start": start, "end": end}
+        if filter_expression:
+            body["filter"] = {"expression": filter_expression}
+        return self._post("/api/v2/metrics/inspect", json_body=body)
+
+    def get_metrics_treemap(
+        self, start: int, end: int, mode: str = "timeseries", limit: int = 20,
+        filter_expression: str = "",
+    ) -> Any:
+        body: dict[str, Any] = {"start": start, "end": end, "mode": mode, "limit": limit}
+        if filter_expression:
+            body["filter"] = {"expression": filter_expression}
+        return self._post("/api/v2/metrics/treemap", json_body=body)
+
+    def list_reduction_rules(self, **params: Any) -> Any:
+        clean = {k: str(v) for k, v in params.items() if v not in (None, "")}
+        return self._get("/api/v2/metric_reduction_rules", params=clean or None)
+
+    def get_reduction_rule(self, rule_id: str) -> Any:
+        return self._get(f"/api/v2/metric_reduction_rules/{rule_id}")
+
+    def create_reduction_rule(self, rule: dict[str, Any]) -> Any:
+        return self._post("/api/v2/metric_reduction_rules", json_body=rule, idempotent=False)
+
+    def update_reduction_rule(self, rule_id: str, rule: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v2/metric_reduction_rules/{rule_id}", json_body=rule)
+
+    def delete_reduction_rule(self, rule_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/metric_reduction_rules/{rule_id}")
+
+    def preview_reduction_rule(self, rule: dict[str, Any]) -> Any:
+        return self._post("/api/v2/metric_reduction_rules/preview", json_body=rule)
+
+    def get_reduction_stats(self) -> Any:
+        return self._get("/api/v2/metric_reduction_rules/stats")
+
+    # ------------------------------------------------------------------
+    # Promoted paths (0.147+)
+    # ------------------------------------------------------------------
+
+    def list_promoted_paths(self, **filters: Any) -> Any:
+        params: dict[str, str] = {}
+        for key, value in filters.items():
+            if value is None or value == "":
+                continue
+            params[key] = str(value).lower() if isinstance(value, bool) else str(value)
+        return self._get("/api/v1/promoted_paths", params=params or None)
+
+    def promote_paths(self, paths: list[dict[str, Any]]) -> Any:
+        return self._send("POST", "/api/v1/promoted_paths", json_body=paths)
+
+    def index_materialized_paths(self, signal: str, dry_run: bool = False) -> Any:
+        return self._post("/api/v1/promoted_paths/materialized",
+                          json_body={"signal": signal, "dryRun": dry_run},
+                          idempotent=dry_run)
+
+    # ------------------------------------------------------------------
+    # Route policies, rule/dashboard saved views, quick filters
+    # ------------------------------------------------------------------
+
+    def list_route_policies(self) -> Any:
+        return self._get("/api/v1/route_policies")
+
+    def get_route_policy(self, policy_id: str) -> Any:
+        return self._get(f"/api/v1/route_policies/{policy_id}")
+
+    def create_route_policy(self, policy: dict[str, Any]) -> Any:
+        return self._post("/api/v1/route_policies", json_body=policy, idempotent=False)
+
+    def update_route_policy(self, policy_id: str, policy: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v1/route_policies/{policy_id}", json_body=policy)
+
+    def delete_route_policy(self, policy_id: str) -> Any:
+        return self._send("DELETE", f"/api/v1/route_policies/{policy_id}")
+
+    def list_rule_views(self) -> Any:
+        """GET /api/v2/rule_views (0.147+)."""
+        return self._get("/api/v2/rule_views")
+
+    def create_rule_view(self, view: dict[str, Any]) -> Any:
+        return self._post("/api/v2/rule_views", json_body=view, idempotent=False)
+
+    def update_rule_view(self, view_id: str, view: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v2/rule_views/{view_id}", json_body=view)
+
+    def delete_rule_view(self, view_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/rule_views/{view_id}")
+
+    def list_dashboard_views(self) -> Any:
+        return self._get("/api/v2/dashboard_views")
+
+    def create_dashboard_view(self, view: dict[str, Any]) -> Any:
+        return self._post("/api/v2/dashboard_views", json_body=view, idempotent=False)
+
+    def update_dashboard_view(self, view_id: str, view: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v2/dashboard_views/{view_id}", json_body=view)
+
+    def delete_dashboard_view(self, view_id: str) -> Any:
+        return self._send("DELETE", f"/api/v2/dashboard_views/{view_id}")
+
+    def list_quick_filters(self) -> Any:
+        """GET /api/v2/quick_filters (0.141+)."""
+        return self._get("/api/v2/quick_filters")
+
+    def get_quick_filters(self, source: str) -> Any:
+        return self._get(f"/api/v2/quick_filters/{source}")
+
+    def set_quick_filters(self, source: str, filters: list[dict[str, Any]]) -> Any:
+        """PUT replaces the whole filter list for a source."""
+        return self._send("PUT", f"/api/v2/quick_filters/{source}",
+                          json_body={"filters": filters})
+
+    # ------------------------------------------------------------------
+    # Cloud integrations (AWS / Azure / GCP)
+    # ------------------------------------------------------------------
+
+    def list_cloud_accounts(self, provider: str) -> Any:
+        return self._get(f"/api/v1/cloud_integrations/{provider}/accounts")
+
+    def get_cloud_account(self, provider: str, account_id: str) -> Any:
+        return self._get(f"/api/v1/cloud_integrations/{provider}/accounts/{account_id}")
+
+    def create_cloud_account(self, provider: str, config: dict[str, Any],
+                             credentials: dict[str, Any]) -> Any:
+        """Returns the account id plus the connection artifact (e.g. an AWS
+        CloudFormation URL) to finish the connection on the provider side.
+
+        *credentials* (SigNoz API/ingestion URLs and keys the provider-side
+        stack uses) is required; `get_cloud_credentials` supplies it.
+        """
+        return self._post(f"/api/v1/cloud_integrations/{provider}/accounts",
+                          json_body={"config": config, "credentials": credentials},
+                          idempotent=False)
+
+    def update_cloud_account(self, provider: str, account_id: str,
+                             config: dict[str, Any]) -> Any:
+        return self._send("PUT",
+                          f"/api/v1/cloud_integrations/{provider}/accounts/{account_id}",
+                          json_body={"config": config})
+
+    def delete_cloud_account(self, provider: str, account_id: str) -> Any:
+        return self._send("DELETE",
+                          f"/api/v1/cloud_integrations/{provider}/accounts/{account_id}")
+
+    def list_cloud_services(self, provider: str, account_id: str = "") -> Any:
+        if account_id:
+            return self._get(
+                f"/api/v1/cloud_integrations/{provider}/accounts/{account_id}/services")
+        return self._get(f"/api/v1/cloud_integrations/{provider}/services")
+
+    def get_cloud_service(self, provider: str, service_id: str, account_id: str = "") -> Any:
+        if account_id:
+            return self._get(f"/api/v1/cloud_integrations/{provider}/accounts/"
+                             f"{account_id}/services/{service_id}")
+        return self._get(f"/api/v1/cloud_integrations/{provider}/services/{service_id}")
+
+    def update_cloud_service(self, provider: str, account_id: str, service_id: str,
+                             config: dict[str, Any]) -> Any:
+        return self._send("PUT", f"/api/v1/cloud_integrations/{provider}/accounts/"
+                                 f"{account_id}/services/{service_id}",
+                          json_body={"config": config})
+
+    def get_cloud_credentials(self, provider: str) -> Any:
+        return self._get(f"/api/v1/cloud_integrations/{provider}/credentials")
+
+    # ------------------------------------------------------------------
+    # Raw data export (streamed)
+    # ------------------------------------------------------------------
+
+    def export_raw_data(self, payload: dict[str, Any], out: Any, fmt: str = "csv") -> int:
+        """Stream POST /api/v1/export_raw_data into the binary file *out*.
+
+        Returns the number of bytes written. Not retried: the response is
+        a stream, and a partial write cannot be resumed.
+        """
+        if fmt not in ("csv", "jsonl"):
+            raise ValueError(f"unknown export format {fmt!r}")
+        written = 0
+        with self._client.stream(
+            "POST", f"{self.endpoint}/api/v1/export_raw_data",
+            params={"format": fmt}, json=payload,
+        ) as resp:
+            if resp.is_error:
+                resp.read()
+                raise SigNozApiError(resp.status_code, _extract_error(resp))
+            if resp.is_redirect:
+                raise SigNozApiError(
+                    resp.status_code,
+                    f"unexpected redirect to {resp.headers.get('location', '?')} "
+                    "(check the endpoint URL, e.g. http vs https)",
+                )
+            ctype = resp.headers.get("content-type", "")
+            if ctype.startswith("text/html"):
+                raise SigNozApiError(
+                    resp.status_code,
+                    "unexpected HTML response; this API may not exist on the server version",
+                )
+            for chunk in resp.iter_bytes():
+                out.write(chunk)
+                written += len(chunk)
+        return written
+
+    def _send(self, method: str, path: str, json_body: Any = None,
+              idempotent: bool = True) -> Any:
+        """Request whose success may be an empty 204 (normalized to status ok)."""
+        resp = self._request(method, path, json_body=json_body, idempotent=idempotent)
+        return self._parse(resp, allow_empty=True)
+
     def _request(
         self,
         method: str,
@@ -708,6 +1151,15 @@ class SigNozClient:
     def _parse(self, resp: httpx.Response, allow_empty: bool = False) -> Any:
         if resp.is_error:
             raise SigNozApiError(resp.status_code, _extract_error(resp))
+        if resp.is_redirect:
+            # The API never redirects. Redirects come from the router on
+            # malformed paths (an empty id: /rules//clone -> 301) or from a
+            # proxy (http -> https); unhandled, they read as empty success.
+            raise SigNozApiError(
+                resp.status_code,
+                f"unexpected redirect to {resp.headers.get('location', '?')} "
+                "(check the endpoint URL, e.g. http vs https, and any id arguments)",
+            )
         if allow_empty and (not resp.content or resp.content.strip() in (b"", b"null")):
             return {"status": "ok"}
         if not resp.content:
@@ -765,6 +1217,14 @@ def _extract_error(resp: httpx.Response) -> str:
         if isinstance(err, dict):
             code = err.get("code", "")
             msg = err.get("message", "")
+            # The specific reasons ("notificationSettings: field is
+            # required") live in error.errors; the message alone is generic.
+            details = [
+                str(e.get("message")) for e in err.get("errors") or []
+                if isinstance(e, dict) and e.get("message")
+            ]
+            if details:
+                msg = f"{msg}: {'; '.join(details)}" if msg else "; ".join(details)
             return _safe_plain(f"{code}: {msg}" if code else msg)
         for key in ("message", "error", "detail"):
             if key in body:

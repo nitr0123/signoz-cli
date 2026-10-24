@@ -12,7 +12,11 @@ from signoz_cli.commands import (  # noqa: F401
     auth,
     bundle,
     channels,
+    cloud,
     dashboards,
+    fields,
+    infra,
+    ingestion,
     logs,
     mcp_server,
     meta,
@@ -22,6 +26,7 @@ from signoz_cli.commands import (  # noqa: F401
     services,
     traces,
     update,
+    users,
     views,
 )
 from signoz_cli.commands.common import (

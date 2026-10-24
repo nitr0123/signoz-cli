@@ -265,7 +265,7 @@ class TestInsecureFlagStrictness:
     def test_redirects_never_followed(self):
         import httpx
 
-        from signoz_cli.client import SigNozClient
+        from signoz_cli.client import SigNozApiError, SigNozClient
 
         seen = []
 
@@ -280,7 +280,9 @@ class TestInsecureFlagStrictness:
             "http://127.0.0.1:9", "SUPERSECRET",
             transport=httpx.MockTransport(handler))
         try:
-            client.get_server_version()
+            # Not followed, and surfaced as an error rather than an empty reply.
+            with pytest.raises(SigNozApiError, match="redirect"):
+                client.get_server_version()
         finally:
             client.close()
         assert len(seen) == 1

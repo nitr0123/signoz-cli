@@ -17,6 +17,28 @@
 - SigNoz 0.147 support, verified live against v0.147.0: Grafana `heatmap`
   panels convert to `signoz/HeatmapPanel` (0.146+), and `channels list
   --kind` documents the new `telegram` kind.
+- New commands for the rest of the SigNoz 0.147 API, exercised against a
+  live v0.147.0 server unless marked *licensed*:
+  - `alerts clone` (legacy-format rules, which the 0.147 server cannot
+    clone, are copied client-side), `alerts route-policies`, `alerts views`.
+  - `dashboards clone`, `lock`, `unlock`, `views`; `dashboards share` /
+    `share-info` / `unshare` for public links (*licensed*).
+  - `traces summary` and `traces thread` (LLM conversation view); `logs
+    export` and `traces export` stream every field to CSV or JSONL.
+  - `health` (unauthenticated readyz/livez/healthz probes, exit 1 when
+    unhealthy; also a new `doctor` check).
+  - `users` (list, invite, grant/revoke roles, reset links, delete),
+    `roles` (custom roles are *licensed*), `service-accounts keys`.
+  - `infra` hosts, pods, nodes, workloads, containers, volumes and setup
+    `checks`.
+  - `metrics inspect`, `metrics treemap`, `metrics reduction-rules`
+    (*licensed*).
+  - `promoted-paths`, `quick-filters`.
+  - `cloud` accounts/services/credentials and `ingestion-keys` with rate
+    limits (*licensed*).
+  - `export --include` gains `route-policies`, `rule-views`,
+    `dashboard-views`, `quick-filters` and `all` (kinds an older server
+    lacks are skipped with a warning); `import`/`apply` handle them too.
 
 ### Fixed
 
@@ -25,6 +47,17 @@
 - `ai pricing-rules create` uses the server's bulk upsert (`PUT`, one
   rule, a list, or a `{"rules": [...]}` body) instead of an unsupported
   POST. Existing rules are never replaced.
+- `import`/`apply` of exported channels: `channels get` returns the
+  receiver config as a JSON string, which the create/update API rejected
+  ("must have at least one notification configuration"); it is now
+  unpacked.
+- API errors show the server's specific reasons (`error.errors[]`), e.g.
+  `alert rule is not valid: notificationSettings: field is required`,
+  instead of only the generic message.
+- A redirect from the server (empty id argument, http->https proxy) is
+  reported as an error instead of reading as an empty success.
+- `signoz --no-input <command>` (and `--no-color`) before the subcommand
+  were reset by the subcommand's own default and had no effect.
 - `service-accounts create --role` assigns the role through
   `/api/v1/service_account_roles`; the old per-account route was removed
   in SigNoz 0.140, so on 0.140+ the account was created without its role

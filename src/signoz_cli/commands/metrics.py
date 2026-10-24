@@ -8,6 +8,7 @@ import click
 
 from signoz_cli.commands.common import (
     _common_options,
+    _confirm,
     _extract_attribute_keys,
     _finish_time_series,
     _flatten_field_keys,
@@ -526,5 +527,264 @@ def metrics_cardinality(
                 rows.append({"label": label, "groups": len(totals),
                              "group": group, "events": total})
         emit(rows, fmt, table_keys=["label", "groups", "group", "events"])
+    except Exception as ex:
+        _handle_error(ex)
+
+
+def _label_text(labels: Any) -> str:
+    parts = []
+    for lab in labels or []:
+        if not isinstance(lab, dict):
+            continue
+        key = lab.get("key")
+        name = key.get("name", "") if isinstance(key, dict) else str(key or "")
+        parts.append(f"{name}={lab.get('value', '')}")
+    return ", ".join(parts)
+
+
+@metrics.command("inspect")
+@_common_options
+@click.argument("metric_name")
+@_time_options(default_range="30m")
+@click.option("--filter", "filter_expr", default="", help="Filter expression on labels.")
+def metrics_inspect(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, metric_name: str, time_range: str | None,
+                    start: int | None, end: int | None, filter_expr: str) -> None:
+    """Show the raw data points of a metric, one row per series.
+
+    Useful to see exactly what a collector is sending before building a
+    query on it. --format json returns every point.
+    """
+    try:
+        s, e = resolve_timestamps(start, end, time_range, default_range="30m",
+                                  profile_time_range=_profile_time_range(profile))
+        client = _get_client(endpoint, token, profile)
+        raw = client.inspect_metric(metric_name, s, e, filter_expr)
+        if fmt == "json":
+            emit(raw, fmt)
+            return
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        rows = []
+        for series in (data.get("series") if isinstance(data, dict) else None) or []:
+            if not isinstance(series, dict):
+                continue
+            values = [v for v in (series.get("values") or []) if isinstance(v, dict)]
+            last = values[-1] if values else {}
+            rows.append({"labels": _label_text(series.get("labels")),
+                         "points": len(values),
+                         "lastTimestamp": last.get("timestamp", ""),
+                         "lastValue": last.get("value", "")})
+        emit({"data": rows}, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@metrics.command("treemap")
+@_common_options
+@_time_options(default_range="1h")
+@click.option("--by", "mode", type=click.Choice(["timeseries", "samples"]),
+              default="timeseries", show_default=True,
+              help="Rank metrics by series count (cardinality) or by samples ingested.")
+@click.option("--limit", type=int, default=20, show_default=True, help="Top N metrics.")
+@click.option("--filter", "filter_expr", default="", help="Filter expression.")
+def metrics_treemap(endpoint: str | None, token: str | None, fmt: str,
+                    profile: str | None, time_range: str | None, start: int | None,
+                    end: int | None, mode: str, limit: int, filter_expr: str) -> None:
+    """Rank metrics by share of total series or samples (find what costs most)."""
+    try:
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h",
+                                  profile_time_range=_profile_time_range(profile))
+        client = _get_client(endpoint, token, profile)
+        raw = client.get_metrics_treemap(s, e, mode=mode, limit=limit,
+                                         filter_expression=filter_expr)
+        if fmt == "json":
+            emit(raw, fmt)
+            return
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        entries = (data.get(mode) if isinstance(data, dict) else None) or []
+        rows = [{"metric": t.get("metricName", ""),
+                 "percent": round(float(t.get("percentage") or 0), 2),
+                 mode: t.get("totalValue", 0)}
+                for t in entries if isinstance(t, dict)]
+        emit({"data": rows}, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@metrics.group("reduction-rules")
+def reduction_rules() -> None:
+    """Drop or keep metric labels at ingest to cut series count.
+
+    Needs SigNoz Cloud or a licensed enterprise server; others answer
+    HTTP 501 ("metric volume control is not enabled"). Preview a rule's
+    effect with `preview` before creating it.
+    """
+
+
+def _rule_body(metric: str | None, match: str, labels: tuple[str, ...]) -> dict[str, Any]:
+    body: dict[str, Any] = {"matchType": match, "labels": list(labels)}
+    if metric:
+        body["metricName"] = metric
+    return body
+
+
+def _rule_row(r: dict[str, Any]) -> dict[str, Any]:
+    return {"id": r.get("id", ""), "metric": r.get("metricName", ""),
+            "match": r.get("matchType", ""), "labels": ", ".join(r.get("labels") or []),
+            "active": r.get("active", ""), "ingestedSeries": r.get("ingestedSeries", ""),
+            "retainedSeries": r.get("retainedSeries", "")}
+
+
+@reduction_rules.command("list")
+@_common_options
+@click.option("--metric", default=None, help="Only rules for this metric.")
+@click.option("--search", default=None, help="Search metric names.")
+@click.option("--order-by", type=click.Choice(
+    ["metric", "ingested_volume", "reduced_volume", "last_updated"]), default=None)
+@click.option("--order", type=click.Choice(["asc", "desc"]), default=None)
+@click.option("--limit", type=int, default=50, show_default=True)
+@click.option("--offset", type=int, default=0, show_default=True)
+def reduction_rules_list(endpoint: str | None, token: str | None, fmt: str,
+                         profile: str | None, metric: str | None, search: str | None,
+                         order_by: str | None, order: str | None,
+                         limit: int, offset: int) -> None:
+    """List metric reduction rules with their series savings."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.list_reduction_rules(metricName=metric, search=search, orderBy=order_by,
+                                          order=order, limit=limit, offset=offset)
+        if fmt == "json":
+            emit(raw, fmt)
+            return
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        rules = (data.get("rules") if isinstance(data, dict) else None) or []
+        emit({"data": [_rule_row(r) for r in rules if isinstance(r, dict)]}, fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@reduction_rules.command("get")
+@_common_options
+@click.argument("rule_id")
+def reduction_rules_get(endpoint: str | None, token: str | None, fmt: str,
+                        profile: str | None, rule_id: str) -> None:
+    """Get a metric reduction rule."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.get_reduction_rule(rule_id)
+        data = raw.get("data") if isinstance(raw, dict) else None
+        emit(raw if fmt == "json" or not isinstance(data, dict) else _rule_row(data), fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+def _rule_options(f):
+    f = click.option("--label", "labels", multiple=True, required=True,
+                     help="Label the rule drops or keeps (repeatable).")(f)
+    f = click.option("--match", type=click.Choice(["drop", "keep"]), required=True,
+                     help="drop: remove the listed labels; keep: keep only them.")(f)
+    return f
+
+
+@reduction_rules.command("preview")
+@_common_options
+@click.argument("metric_name")
+@_rule_options
+@click.option("--lookback", default="24h", show_default=True,
+              help="How much recent data to estimate from.")
+def reduction_rules_preview(endpoint: str | None, token: str | None, fmt: str,
+                            profile: str | None, metric_name: str, match: str,
+                            labels: tuple[str, ...], lookback: str) -> None:
+    """Estimate a rule's series reduction and the dashboards/alerts it affects."""
+    from signoz_cli.timeutil import parse_time_range
+
+    try:
+        body = _rule_body(metric_name, match, labels)
+        body["lookbackMs"] = parse_time_range(lookback)
+        client = _get_client(endpoint, token, profile)
+        raw = client.preview_reduction_rule(body)
+        if fmt == "json":
+            emit(raw, fmt)
+            return
+        data = raw.get("data", raw) if isinstance(raw, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        emit({"metric": metric_name,
+              "ingestedSeries": data.get("ingestedSeries", ""),
+              "retainedSeries": data.get("retainedSeries", ""),
+              "reductionPercent": data.get("reductionPercent", ""),
+              "droppedLabels": ", ".join(data.get("droppedLabels") or []),
+              "affectedAssets": len(data.get("affectedAssets") or [])}, fmt)
+        for asset in data.get("affectedAssets") or []:
+            if isinstance(asset, dict):
+                click.echo(f"affects {asset.get('type', '')} '{asset.get('name', '')}' "
+                           f"({', '.join(asset.get('impactedLabels') or [])})", err=True)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@reduction_rules.command("create")
+@_common_options
+@click.argument("metric_name")
+@_rule_options
+def reduction_rules_create(endpoint: str | None, token: str | None, fmt: str,
+                           profile: str | None, metric_name: str, match: str,
+                           labels: tuple[str, ...]) -> None:
+    """Create a metric reduction rule (applies to newly ingested data)."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.create_reduction_rule(_rule_body(metric_name, match, labels))
+        data = raw.get("data") if isinstance(raw, dict) else None
+        emit(raw if fmt == "json" or not isinstance(data, dict) else _rule_row(data), fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@reduction_rules.command("update")
+@_common_options
+@click.argument("rule_id")
+@_rule_options
+def reduction_rules_update(endpoint: str | None, token: str | None, fmt: str,
+                           profile: str | None, rule_id: str, match: str,
+                           labels: tuple[str, ...]) -> None:
+    """Replace a rule's match type and labels."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.update_reduction_rule(rule_id, _rule_body(None, match, labels))
+        data = raw.get("data") if isinstance(raw, dict) else None
+        emit(raw if fmt == "json" or not isinstance(data, dict) else _rule_row(data), fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@reduction_rules.command("delete")
+@_common_options
+@click.argument("rule_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen; do nothing.")
+def reduction_rules_delete(endpoint: str | None, token: str | None, fmt: str,
+                           profile: str | None, rule_id: str, yes: bool,
+                           dry_run: bool) -> None:
+    """Delete a metric reduction rule (full series are ingested again)."""
+    try:
+        if dry_run:
+            emit({"action": "delete", "resource": "metric reduction rule", "id": rule_id}, fmt)
+            return
+        if not yes:
+            _confirm(f"Delete metric reduction rule {rule_id}?")
+        client = _get_client(endpoint, token, profile)
+        emit(client.delete_reduction_rule(rule_id), fmt)
+    except Exception as ex:
+        _handle_error(ex)
+
+
+@reduction_rules.command("stats")
+@_common_options
+def reduction_rules_stats(endpoint: str | None, token: str | None, fmt: str,
+                          profile: str | None) -> None:
+    """Totals across all rules: series/samples before and after, estimated savings."""
+    try:
+        client = _get_client(endpoint, token, profile)
+        raw = client.get_reduction_stats()
+        emit(raw if fmt == "json" else raw.get("data", raw), fmt)
     except Exception as ex:
         _handle_error(ex)

@@ -13,6 +13,7 @@ from signoz_cli.commands.common import (
     _is_supported_server,
     _is_truthy,
     _redact_userinfo,
+    _resolve_credentials,
     _selected_profile_name,
     cli,
 )
@@ -34,6 +35,61 @@ def completion(shell: str) -> None:
     """
     click.echo(f"# Add this to your {shell} configuration:")
     click.echo(f'eval "$(_SIGNOZ_COMPLETE={shell}_source signoz)"')
+
+
+_PROBES = ("readyz", "livez", "healthz")
+
+
+def _probe_rows(client, probes: tuple[str, ...]) -> list[dict[str, str]]:
+    """One row per probe: healthy yes/no plus any services reported."""
+    rows = []
+    for probe in probes:
+        status, body = client.get_health(probe)
+        data = body.get("data", body) if isinstance(body, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        # livez answers a bare {"status": "success"}: no data means the
+        # HTTP status is the verdict.
+        healthy = status < 400 and bool(data.get("healthy", True))
+        services = data.get("services") or {}
+        detail = "; ".join(
+            f"{state}: {', '.join(map(str, names))}"
+            for state, names in sorted(services.items())
+            if names
+        ) if isinstance(services, dict) else ""
+        rows.append({"probe": probe, "healthy": "yes" if healthy else "no",
+                     "http": str(status), "services": detail})
+    return rows
+
+
+@cli.command("health")
+@_common_options
+@click.option("--probe", type=click.Choice(["all", *_PROBES]), default="readyz",
+              show_default=True,
+              help="readyz: ready to serve; livez: process alive; healthz: overall.")
+def health_cmd(endpoint: str | None, token: str | None, fmt: str,
+               profile: str | None, probe: str) -> None:
+    """Check whether the SigNoz server is up (exit 1 when unhealthy).
+
+    Uses the server's unauthenticated health probes, so it works before
+    an API key is configured: only the endpoint is required. Made for
+    scripts and CI, e.g. waiting for a fresh deploy:
+
+    \b
+      until signoz health >/dev/null; do sleep 5; done
+    """
+    try:
+        _ep, tok = _resolve_credentials(endpoint, token, profile)
+        client = _get_client(endpoint, tok or "unauthenticated", profile)
+        client.max_retries = 0  # a 503 is the answer, not a transient error
+        probes = _PROBES if probe == "all" else (probe,)
+        rows = _probe_rows(client, probes)
+        emit(rows, fmt)
+        if any(r["healthy"] != "yes" for r in rows):
+            raise SystemExit(1)
+    except SystemExit:
+        raise
+    except Exception as e:
+        _handle_error(e)
 
 
 @cli.command("doctor")
@@ -172,6 +228,17 @@ def doctor_cmd(endpoint: str | None, token: str | None, fmt: str,
         _row("version", "warn",
              f"Server {server_version} outside tested range "
              f"({SUPPORTED_SIGNOZ_RANGE}).")
+    try:
+        client.max_retries = 0
+        ready = _probe_rows(client, ("readyz",))[0]
+        if ready["healthy"] == "yes":
+            _row("health", "pass", "Server reports ready (readyz).")
+        else:
+            _row("health", "warn",
+                 f"Server not ready (readyz HTTP {ready['http']})"
+                 f"{': ' + ready['services'] if ready['services'] else ''}.")
+    except Exception:
+        _row("health", "warn", "Health probe unavailable (needs SigNoz 0.136+).")
     emit(rows, fmt)
 
 

@@ -7,6 +7,7 @@ from collections import OrderedDict
 import click
 
 from signoz_cli.client import SigNozApiError
+from signoz_cli.commands._export import export_options, run_export
 from signoz_cli.commands.common import (
     _NO_FIELD_AGGREGATIONS,
     _VALID_AGGREGATIONS,
@@ -21,6 +22,7 @@ from signoz_cli.commands.common import (
     _parse_order_by,
     _profile_time_range,
     _q,
+    _time_options,
     _unwrap_v5,
     cli,
 )
@@ -353,3 +355,36 @@ def logs_tail(
         click.echo("Stopped.", err=True)
 
 
+
+
+@logs.command("export")
+@_common_options
+@click.option("--query", default=None, help="Filter expression (SigNoz search syntax).")
+@click.option("--service", default=None, help="Service name filter.")
+@click.option("--severity", default=None, help="Severity filter (e.g. ERROR).")
+@click.option("--search-text", default=None, help="Text to search in log body.")
+@_time_options(default_range="1h")
+@export_options
+def logs_export(endpoint: str | None, token: str | None, fmt: str, profile: str | None,
+                query: str | None, service: str | None, severity: str | None,
+                search_text: str | None, time_range: str | None, start: int | None,
+                end: int | None, out_path: str, as_fmt: str | None, limit: int) -> None:
+    """Download matching logs, all fields, to a CSV or JSONL file.
+
+    Streams from the server's export API instead of paging through
+    search, so large exports stay fast and use little memory.
+
+    \b
+    Examples:
+      signoz logs export --service api --time-range 24h --out api.csv
+      signoz logs export --severity ERROR --out errors.jsonl --limit 50000
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        filter_expr = _build_log_filter(query, service, severity, search_text)
+        s, e = resolve_timestamps(start, end, time_range, default_range="1h",
+                                  profile_time_range=_profile_time_range(profile))
+        run_export(client, build_logs_query_payload(s, e, filter_expr), out_path,
+                   as_fmt, limit)
+    except Exception as ex:
+        _handle_error(ex)

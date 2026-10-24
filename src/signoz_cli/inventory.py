@@ -1,4 +1,4 @@
-"""Shared inventory helpers: list/fetch/diff dashboards, alerts, channels, views.
+"""Shared inventory helpers: list/fetch/diff every bundle kind (dashboards, alerts, ...).
 
 Used by the bundle commands (`export`/`import`/`apply`), the per-kind
 `diff`/`diff-remote` commands, and lint. Lives here (instead of inside
@@ -39,9 +39,21 @@ def _strip_volatile(obj: Any) -> Any:
     return obj
 
 
+# Every bundle kind, in dependency order for import/apply: route policies
+# reference channels by name, so channels go first.
+ALL_KINDS = ("channels", "route-policies", "views", "rule-views", "dashboard-views",
+             "quick-filters", "dashboards", "alerts")
+# Exported when --include is not given (newer kinds need newer servers).
+DEFAULT_KINDS = ("dashboards", "alerts", "channels", "views")
+# Kinds the server cannot delete (apply --prune skips them).
+NO_DELETE_KINDS = frozenset({"quick-filters"})
+
+
 def _item_name(kind: str, item: dict[str, Any]) -> str:
     if kind == "alerts":
         return str(item.get("alert") or item.get("name") or "unnamed")
+    if kind == "quick-filters":
+        return str(item.get("source") or "unnamed")
     return str(item.get("name") or "unnamed")
 
 
@@ -63,7 +75,11 @@ def _fetch_full(client, kind: str, item: dict[str, Any]) -> dict[str, Any] | Non
             data = client.get_channel(item_id)
         elif kind == "views":
             data = client.get_saved_view(item_id)
-        else:  # pragma: no cover - guarded by _list_items
+        elif kind == "route-policies":
+            data = client.get_route_policy(item_id)
+        else:
+            # rule-views, dashboard-views, quick-filters: the list
+            # endpoint already returns complete objects.
             return item
     except Exception as ex:
         from signoz_cli.output import _safe_plain
@@ -107,6 +123,18 @@ def _list_items(client, kind: str) -> list[dict[str, Any]]:
     if kind == "views":
         raw = client.list_saved_views()
         data = raw.get("data") if isinstance(raw, dict) else raw
+        return [v for v in (data or []) if isinstance(v, dict)]
+    if kind in ("route-policies", "rule-views", "dashboard-views", "quick-filters"):
+        method, key = {
+            "route-policies": ("list_route_policies", None),
+            "rule-views": ("list_rule_views", "views"),
+            "dashboard-views": ("list_dashboard_views", "views"),
+            "quick-filters": ("list_quick_filters", None),
+        }[kind]
+        raw = getattr(client, method)()
+        data = raw.get("data") if isinstance(raw, dict) else raw
+        if key and isinstance(data, dict):
+            data = data.get(key)
         return [v for v in (data or []) if isinstance(v, dict)]
     raise click.UsageError(f"Unknown bundle kind '{kind}'.")
 
