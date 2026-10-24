@@ -36,9 +36,9 @@ Requires Python 3.10+.
 Install a pinned release tag with pipx:
 
 ```shell
-pipx install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.45"
+pipx install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.46"
 # or plain pip:
-pip install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.45"
+pip install "git+https://github.com/nitr0123/signoz-cli.git@v0.5.46"
 ```
 
 ### Helper script
@@ -48,7 +48,7 @@ a pip fallback, and verifies with `signoz --version`:
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/nitr0123/signoz-cli/main/install.sh | sh
-sh install.sh v0.5.45      # pinned, from a clone
+sh install.sh v0.5.46      # pinned, from a clone
 ```
 
 Set `SIGNOZ_PYPI_INDEX` to install from a PyPI-compatible package index
@@ -57,7 +57,7 @@ instead of git.
 ### From a release wheel
 
 ```shell
-pip install "https://github.com/nitr0123/signoz-cli/releases/download/v0.5.45/signoz_cli-0.5.45-py3-none-any.whl"
+pip install "https://github.com/nitr0123/signoz-cli/releases/download/v0.5.46/signoz_cli-0.5.46-py3-none-any.whl"
 ```
 
 ### From source
@@ -70,7 +70,7 @@ pip install .
 pip install -e '.[dev]'
 ```
 
-Tags are immutable — `@v0.5.45` always gives you exactly the v0.5.45 build.
+Tags are immutable — `@v0.5.46` always gives you exactly the v0.5.46 build.
 See [releases](https://github.com/nitr0123/signoz-cli/releases) for available versions.
 
 ## Updating
