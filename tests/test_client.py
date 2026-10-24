@@ -416,3 +416,46 @@ class TestSavedViewsPaths:
         assert ("GET", "/api/v1/explorer/views/abc") in seen
         assert ("POST", "/api/v1/explorer/views") in seen
         assert ("DELETE", "/api/v1/explorer/views/abc") in seen
+
+
+class TestV0145Endpoints:
+    def test_rules_v3_repeated_states(self):
+        h = RecordingHandler()
+        c = make_client(h)
+        c.list_rules_v3(query="team = infra", states=["firing", "pending"],
+                        sort="name", order="asc", limit=5, offset=10)
+        url = str(h.requests[0].url)
+        assert url.startswith(BASE + "/api/v3/rules?")
+        assert "states=firing" in url and "states=pending" in url
+        assert "query=team+%3D+infra" in url
+        assert "sort=name" in url and "order=asc" in url
+        assert "limit=5" in url and "offset=10" in url
+
+    def test_rules_v3_no_params(self):
+        h = RecordingHandler()
+        make_client(h).list_rules_v3()
+        assert str(h.requests[0].url) == BASE + "/api/v3/rules"
+
+    def test_rules_v3_error_surfaces(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"message": "bad sort"})
+        with pytest.raises(SigNozApiError, match="bad sort"):
+            make_client(handler).list_rules_v3(sort="bogus")
+
+    def test_flamegraph_path(self):
+        h = RecordingHandler()
+        make_client(h).get_flamegraph("abc123")
+        assert str(h.requests[0].url) == BASE + "/api/v3/traces/abc123/flamegraph"
+
+    def test_history_filter_params(self):
+        h = RecordingHandler()
+        c = make_client(h)
+        c.get_history_filter_keys("r1", signal="logs", limit=10, start=1000)
+        url = str(h.requests[0].url)
+        assert url.startswith(BASE + "/api/v2/rules/r1/history/filter_keys?")
+        assert "signal=logs" in url and "startUnixMilli=1000" in url
+        c.get_history_filter_values("r1", "service.name", search_text="pay",
+                                    start=1000, end=2000)
+        url = str(h.requests[1].url)
+        assert "history/filter_values" in url
+        assert "name=service.name" in url and "searchText=pay" in url

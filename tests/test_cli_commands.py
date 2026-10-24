@@ -343,3 +343,87 @@ class TestSavedQueries:
                   "--query", "SELECT 2", "--yes"]).exit_code == 0
         mode = _stat.S_IMODE((tmp_path / "queries.json").stat().st_mode)
         assert mode == 0o600
+
+
+class TestV0145Commands:
+    def test_alerts_rules_v3_params(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        seen = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def list_rules_v3(self, **kwargs):
+                seen.update(kwargs)
+                return {"status": "success",
+                        "data": {"rules": [], "total": 0}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "rules", "--query",
+                                     "team = infra", "--state", "firing",
+                                     "--state", "pending", "--sort", "name",
+                                     "--order", "asc", "--limit", "5",
+                                     "--json"])
+        assert result.exit_code == 0, result.output
+        assert seen["query"] == "team = infra"
+        assert seen["states"] == ["firing", "pending"]
+        assert (seen["sort"], seen["order"]) == ("name", "asc")
+        assert seen["limit"] == 5
+
+    def test_traces_flamegraph(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_flamegraph(self, trace_id):
+                assert trace_id == "abc123"
+                return {"status": "success",
+                        "data": {"flamegraph": {"spans": 3}}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["traces", "flamegraph", "abc123",
+                                     "--json"])
+        assert result.exit_code == 0, result.output
+        assert "flamegraph" in result.output
+
+    def test_history_fields_keys_and_values(self, runner, monkeypatch):
+        import signoz_cli.commands.common as cm
+
+        seen = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def close(self):
+                pass
+
+            def get_history_filter_keys(self, *a, **kwargs):
+                seen["keys"] = (a, kwargs)
+                return {"status": "success", "data": {"keys": []}}
+
+            def get_history_filter_values(self, *a, **kwargs):
+                seen["values"] = (a, kwargs)
+                return {"status": "success", "data": {"values": []}}
+
+        monkeypatch.setattr(cm, "SigNozClient", Fake)
+        result = runner.invoke(cli, ["alerts", "history-fields", "r1",
+                                     "--json"])
+        assert result.exit_code == 0, result.output
+        assert seen["keys"][1]["signal"] == "traces"
+        result = runner.invoke(cli, ["alerts", "history-fields", "r1",
+                                     "--field", "service.name",
+                                     "--search", "pay", "--json"])
+        assert result.exit_code == 0, result.output
+        assert seen["values"][0][1] == "service.name"
+        assert seen["values"][1]["search_text"] == "pay"

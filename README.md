@@ -184,6 +184,7 @@ signoz metrics field-values system_memory_usage
 
 ```shell
 signoz alerts list
+signoz alerts rules --query "team = infra" --state firing --sort name  # v3 API (0.144+)
 signoz alerts get RULE_ID
 # v2 history API: cursor-paginated timeline
 signoz alerts history RULE_ID --time-range 24h --order desc
@@ -208,6 +209,7 @@ signoz dashboards patch UUID patch.json       # JSON-Patch array
 signoz dashboards delete UUID
 signoz dashboards lint ./dashboards/*.json    # offline validation (CI-ready)
 signoz dashboards diff-remote --name D --from-profile prod --to-profile staging
+signoz dashboards convert grafana.json --out signoz.json  # Grafana import
 signoz alerts lint ./rules/*.json
 ```
 
@@ -260,6 +262,7 @@ OTel metrics keep dotted names, so PromQL queries need brace selectors.
 ```shell
 signoz traces detail TRACE_ID        # spans with attributes/events
 signoz traces waterfall TRACE_ID     # ASCII timeline (raw: detail -f json)
+signoz traces flamegraph TRACE_ID    # flamegraph view (SigNoz 0.144+)
 signoz metrics query e2e.requests.total --time-aggregation sum --compare 7d
 signoz logs tail --service payment-svc
 signoz alerts create rule.json       # v2 rule schema; also update/patch/delete/test
@@ -271,6 +274,8 @@ signoz service-accounts list         # admin only
 signoz views list                    # saved views
 signoz watch -n 5 -- alerts list     # re-run any command (secrets redacted)
 signoz export ./backup -p prod       # dashboards/rules/channels/views bundle
+signoz export ./backup -p prod --encrypt  # single .enc file, safe for git
+signoz import ./backup.enc -p staging --decrypt --yes
 signoz apply ./backup -p staging --dry-run   # declarative sync preview
 signoz apply ./backup -p staging --prune --yes  # sync + delete unmanaged
 signoz logs search --all             # auto-paginate everything

@@ -299,3 +299,43 @@ def dashboards_diff_remote(
             click.echo("(no changes)")
     except Exception as e:
         _handle_error(e)
+
+
+@dashboards.command("convert")
+@click.argument("json_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--out", "out_path", default=None,
+              help="Write the converted dashboard here (default: stdout).")
+@click.option("-f", "--format", "fmt", type=click.Choice(["json", "table"]),
+              default="json", show_default=True,
+              help="Output format for the converted document.")
+def dashboards_convert(json_file: str, out_path: str | None, fmt: str) -> None:
+    """Convert a Grafana dashboard file to a SigNoz v2 dashboard.
+
+    Prints warnings for anything without a SigNoz equivalent (panel
+    types, targets, variables, layout, annotations) — nothing is
+    silently dropped. Pair the result with `dashboards lint` and
+    `dashboards create`.
+
+    \b
+    Examples:
+      signoz dashboards convert grafana.json --out signoz.json
+      signoz dashboards convert grafana.json | signoz dashboards lint /dev/stdin
+    """
+    try:
+        from signoz_cli.grafana import convert_dashboard
+
+        doc = _read_json(json_file)
+        converted, warnings = convert_dashboard(doc)
+        for warning in warnings:
+            click.echo(f"Warning: {warning}", err=True)
+        if out_path:
+            import json as _json
+
+            with open(out_path, "w", encoding="utf-8") as fh:
+                _json.dump(converted, fh, indent=2)
+                fh.write("\n")
+            click.echo(f"Converted dashboard written to {out_path}", err=True)
+        else:
+            emit(converted, fmt)
+    except Exception as e:
+        _handle_error(e)

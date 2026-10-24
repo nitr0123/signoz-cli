@@ -320,6 +320,27 @@ def traces_field_values(
         _handle_error(e)
 
 
+@traces.command("flamegraph")
+@_common_options
+@click.argument("trace_id")
+def traces_flamegraph(
+    endpoint: str | None,
+    token: str | None,
+    fmt: str,
+    profile: str | None,
+    trace_id: str,
+) -> None:
+    """Get the flamegraph view of one trace (SigNoz 0.144+).
+
+    Needs SigNoz 0.144+; older servers fail cleanly with a version hint.
+    """
+    try:
+        client = _get_client(endpoint, token, profile)
+        emit(client.get_flamegraph(trace_id), fmt)
+    except Exception as e:
+        _handle_error(e)
+
+
 @traces.command("detail")
 @_common_options
 @click.argument("trace_id")
